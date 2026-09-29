@@ -54,6 +54,8 @@ st.markdown("<div class='fieldnet-brand'><h2>FieldNet v29.1 — Audit & Correcti
 st.caption('Equinor-inspired themes are unofficial and are not affiliated with, endorsed by, or sponsored by Equinor ASA. Validate engineering correlations before operational use.')
 if 'nodes' not in st.session_state: st.session_state.nodes,st.session_state.edges=demo_case()
 if 'results' not in st.session_state: st.session_state.results=None
+if 'network_solve_state' not in st.session_state: st.session_state.network_solve_state={'status':'UNSOLVED','message':'Network has not been solved.'}
+if 'network_viewport' not in st.session_state: st.session_state.network_viewport={'zoom':1.0,'scrollLeft':0,'scrollTop':0}
 
 def unit_input(label, canonical, to_display, from_display, key, min_value=None, max_value=None, step=None, fmt=None):
     profile=st.session_state.unit_profile
@@ -67,9 +69,10 @@ def unit_input(label, canonical, to_display, from_display, key, min_value=None, 
 
 with st.sidebar:
     st.header('Component palette')
-    kind=st.selectbox('Component',['well','manifold','separator','separator_stage','water_source','gas_source','water_injector','gas_injector','oil_export','gas_export','water_disposal','sink']); name=st.text_input('Name',f'{kind.upper()}-{len(st.session_state.nodes)+1:02d}')
+    kind=st.selectbox('Component',['reservoir','well','manifold','separator','separator_stage','water_source','gas_source','water_injector','gas_injector','oil_export','gas_export','water_disposal','sink']); name=st.text_input('Name',f'{kind.upper()}-{len(st.session_state.nodes)+1:02d}')
     if st.button('Add component',use_container_width=True):
         nid=str(uuid.uuid4())[:8]; pressure=None; prm={}
+        if kind=='reservoir': prm={'reservoir_pressure_bar':250.0,'pore_volume_m3':2000000.0,'total_compressibility_1bar':8e-5,'min_pressure_bar':20.0}
         if kind=='well': prm={'reservoir_pressure_bar':220.0,'ipr_model':'PI','pi_m3d_bar':10.0,'qmax_m3d':1500.0,'initial_pressure_bar':80.0,'initial_rate_m3d':500.0,'depth_m':2000.0,'tubing_id_m':0.0889,'tubing_roughness_m':4.5e-5,'temperature_c':70.0,'water_cut':0.2,'gor_sm3sm3':100.0,'api':35.0,'gas_sg':0.75,'correlation':'Beggs-Brill'}
         if kind in ('sink','separator','separator_stage','oil_export','gas_export','water_disposal'): pressure=35.0
         if kind in ('water_source','gas_source'): pressure=180.0
@@ -85,16 +88,18 @@ with st.sidebar:
 
 tab_net,tab_nodal,tab_diag,tab_fa,tab_results,tab_constraints,tab_ops,tab_cal,tab_forecast,tab_development,tab_dev26,tab_uncertainty,tab_rel,tab_res25,tab_io27,tab_qa28,tab_scen29=st.tabs(['Network','Nodal analysis','Hydraulic profiles','Flow assurance','Results','Constraints & equipment','Optimization & sensitivity','Calibration','Life-of-field','Field Development','Development Planning','Uncertainty','Reliability','Reservoir coupling','Data & interoperability','Model assurance','Scenarios'])
 with tab_net:
-    canvas,props=st.columns([2.1,1])
+    canvas,props=st.columns([4.2,1])
     with canvas:
-        edit = network_editor(st.session_state.nodes, st.session_state.edges, st.session_state.results, key='network-v14')
+        edit = network_editor(st.session_state.nodes, st.session_state.edges, st.session_state.results, solve_state=st.session_state.network_solve_state, viewport=st.session_state.network_viewport, height=860, key='network-current')
         selected = edit.get('selected') if isinstance(edit,dict) else None
+        if isinstance(edit,dict) and isinstance(edit.get('viewport'),dict): st.session_state.network_viewport=edit['viewport']
         if isinstance(edit,dict) and isinstance(edit.get('nodes'),list) and isinstance(edit.get('edges'),list):
             incoming={'nodes':edit['nodes'],'edges':edit['edges']}
             current={'nodes':st.session_state.nodes,'edges':st.session_state.edges}
             if json.dumps(incoming,sort_keys=True) != json.dumps(current,sort_keys=True):
                 st.session_state.nodes,st.session_state.edges=incoming['nodes'],incoming['edges']
                 st.session_state.results=None
+                st.session_state.network_solve_state={'status':'UNSOLVED','message':'Network changed; solve results invalidated.'}
                 st.rerun()
         issues=validate_topology(st.session_state.nodes,st.session_state.edges)
         ca,cb=st.columns(2)
@@ -104,7 +109,7 @@ with tab_net:
         if issues:
             with st.expander('Topology validation',expanded=any(i['severity']=='error' for i in issues)):
                 for i in issues: st.write(('🔴' if i['severity']=='error' else '🟠'),i['message'])
-        st.caption('v8 canvas remains bidirectional: add equipment from its palette, drag nodes, select objects, create links by clicking OUT then IN, delete/copy, and use canvas undo/redo. Every edit is synchronized into the Python case model.')
+        st.caption('Current engineering canvas: reservoir/tank and production/facility objects, drag/connect/edit, persistent zoom/pan, fit/reset view, undo/redo, and explicit solver state synchronized with the Python model.')
     with props:
         ids=[n['id'] for n in st.session_state.nodes]; edge_ids=[e['id'] for e in st.session_state.edges]
         sid=selected if selected in ids else (ids[0] if ids and selected not in edge_ids else None)
@@ -118,6 +123,8 @@ with tab_net:
         if sid:
             n=next(x for x in st.session_state.nodes if x['id']==sid); n['name']=st.text_input('Name',n['name'],key='nm'+sid)
             if n['kind'] in ('sink','separator','separator_stage','oil_export','gas_export','water_disposal','water_source','gas_source'): n['pressure_bar']=unit_input(f"Boundary pressure [{ul['pressure']}]",float(n.get('pressure_bar') or 35),pressure_to_display,pressure_from_display,'bp'+sid,0.1,1000.0)
+            if n['kind']=='reservoir':
+                rp=n.setdefault('params',{}); rp['reservoir_pressure_bar']=unit_input(f"Tank pressure [{ul['pressure']}]",float(rp.get('reservoir_pressure_bar',250.0)),pressure_to_display,pressure_from_display,'rpr'+sid,1.0,1500.0); rp['pore_volume_m3']=st.number_input('Tank pore volume [m³]',1.0,1e12,float(rp.get('pore_volume_m3',2e6)),key='rpv'+sid); rp['total_compressibility_1bar']=st.number_input('Total compressibility [1/bar]',1e-9,1.0,float(rp.get('total_compressibility_1bar',8e-5)),format='%.6g',key='rtc'+sid); rp['min_pressure_bar']=unit_input(f"Minimum tank pressure [{ul['pressure']}]",float(rp.get('min_pressure_bar',20.0)),pressure_to_display,pressure_from_display,'rmp'+sid,0.1,1000.0)
             if n['kind']=='well':
                 p=n['params']; p['reservoir_pressure_bar']=unit_input(f"Reservoir pressure [{ul['pressure']}]",float(p.get('reservoir_pressure_bar',220)),pressure_to_display,pressure_from_display,'pr'+sid,1.,1500.); p['ipr_model']=st.selectbox('IPR',['PI','Vogel'],index=0 if p.get('ipr_model')=='PI' else 1,key='im'+sid)
                 if p['ipr_model']=='PI': p['pi_m3d_bar']=unit_input('PI [m³/d/bar]' if st.session_state.unit_profile=='norwegian_si' else 'PI [stb/d/psi]',float(p.get('pi_m3d_bar',10)),pi_to_display,pi_from_display,'pi'+sid,0.001,10000.)
@@ -140,8 +147,18 @@ with tab_net:
             for k in ['temperature_c','water_cut','gor_sm3sm3']: e.setdefault('params',{})[k]=row[k]
     c1,c2=st.columns(2)
     if c1.button('▶ Solve network',type='primary',use_container_width=True):
-        try: st.session_state.results=solve_v21(st.session_state.nodes,st.session_state.edges,warm_start=st.session_state.get('v21_warm_start'),attempts=3); st.session_state.v21_warm_start={'pressures':st.session_state.results[0],'flows':st.session_state.results[1]}
-        except Exception as exc: st.error(f'Solver error: {exc}')
+        st.session_state.network_solve_state={'status':'SOLVING','message':'Solving network…'}
+        try:
+            st.session_state.results=solve_v21(st.session_state.nodes,st.session_state.edges,warm_start=st.session_state.get('v21_warm_start'),attempts=3)
+            psol,qsol,info,_=st.session_state.results
+            st.session_state.v21_warm_start={'pressures':psol,'flows':qsol}
+            ok=bool(info.get('success')) and info.get('quality_gate')=='PASS'
+            st.session_state.network_solve_state={'status':'SOLVED' if ok else 'FAILED','quality_gate':info.get('quality_gate'),'message':info.get('message','Solver finished.'),'debug':info.get('debug',[])}
+            st.rerun()  # editor is rendered earlier in the Streamlit pass; push final solve payload on a fresh render
+        except Exception as exc:
+            st.session_state.results=None
+            st.session_state.network_solve_state={'status':'FAILED','quality_gate':'FAIL','message':str(exc)}
+            st.rerun()
     payload=json.dumps({'version':'29.1','application':'FieldNet v29.1','storage_units':'canonical','display_unit_profile':st.session_state.unit_profile,'standard_conditions':STANDARD_CONDITIONS,'nodes':st.session_state.nodes,'edges':st.session_state.edges},indent=2); c2.download_button('Export case JSON',payload,'fieldnet_v29_1_case.json','application/json',use_container_width=True)
     uploaded=st.file_uploader('Load FieldNet project JSON',type=['json'],key='project_upload')
     if uploaded is not None and st.button('Load project',use_container_width=True):
@@ -378,9 +395,15 @@ with tab_res25:
     st.caption('Reduced-order quasi-steady material balance coupled to the production network. Communicating tanks, aquifer influx and injector connectivity are planning models—not a 3-D reservoir simulator.')
     wells25=[n for n in st.session_state.nodes if n.get('kind')=='well']
     default_tanks=[]
-    for i,w in enumerate(wells25):
-        rp=float(w.get('params',{}).get('reservoir_pressure_bar',220.0))
-        default_tanks.append({'id':f'T{i+1}','name':f'Tank {i+1}','pressure_bar':rp,'pore_volume_m3':2e6,'total_compressibility_1bar':8e-5,'min_pressure_bar':20.0})
+    canvas_tanks=[n for n in st.session_state.nodes if n.get('kind')=='reservoir']
+    if canvas_tanks:
+        for n in canvas_tanks:
+            rp=n.get('params',{}); pbar=float(rp.get('reservoir_pressure_bar',250.0))
+            default_tanks.append({'id':n['id'],'name':n.get('name',n['id']),'pressure_bar':pbar,'pore_volume_m3':float(rp.get('pore_volume_m3',2e6)),'total_compressibility_1bar':float(rp.get('total_compressibility_1bar',8e-5)),'min_pressure_bar':float(rp.get('min_pressure_bar',20.0))})
+    else:
+        for i,w in enumerate(wells25):
+            rp=float(w.get('params',{}).get('reservoir_pressure_bar',220.0))
+            default_tanks.append({'id':f'T{i+1}','name':f'Tank {i+1}','pressure_bar':rp,'pore_volume_m3':2e6,'total_compressibility_1bar':8e-5,'min_pressure_bar':20.0})
     tdf=st.data_editor(pd.DataFrame(default_tanks),num_rows='dynamic',use_container_width=True,key='v25_tanks')
     maprows=[]
     tids=[str(x) for x in tdf.get('id',pd.Series(dtype=str)).tolist() if str(x)]
