@@ -1,0 +1,402 @@
+# FieldNet Changelog
+
+Version history and major releases. See [AUDIT_V30.md](AUDIT_V30.md) for detailed v30 findings.
+
+## v31 — Reservoir Tanks, Production Prognosis & App Reorganization
+
+**Release Date:** 2026-09-30
+
+### Major Features
+
+#### Tank-Based Reservoir Model (`network/reservoir_mb.py`)
+
+- **Reservoir tank** nodes define in-place volume and fluid phase
+- Supported phases:
+  - **Oil:** STOIIP [Sm³], BO, Rs, bubble point, solution-gas drive
+  - **Dry gas:** GIIP [Sm³], p/z material balance
+  - **Gas condensate:** GIIP + CGR, with condensate production
+- **Tank assignment:** Drag tank onto well in editor → well takes tank pressure and fluid
+- **Automatic depletion:** Tank pressure updated each forecast step via material balance
+- **Aquifer support:** Optional Schilthuis aquifer for voidage replacement
+- **Fluid evolution:**
+  - Water cut follows S-curve from initial to max over recovery factor range
+  - GOR rises as tank depletes below bubble point
+
+#### Production Forecast & Development Planning
+
+- **Forecast tab:** Run multi-step production prognosis with automatic depletion sub-stepping
+- **KPIs:** Peak rate, plateau, cumulative oil, recovery factor, final water cut
+- **Charts:** Liquid rate, gas rate, cumulative oil, tank pressure, water cut, GOR per well
+- **Development schedule:** Gantt chart with rig serialization, task dependencies, first-oil date
+- **Constraints editor:** Single table for all capacity limits, well rate caps, minimum BHP
+
+#### Well-Count Optimization
+
+- **7-scenario study:** Automatically runs 1–7 producer configurations
+- **Marginal-oil rule:** Recommends optimal well count based on incremental production per well
+- **KPI comparison:** Peak, plateau, cumulative for each scenario
+
+#### Scenario Comparison
+
+- **Custom scenarios:** Define variations (PI multiplier, capacity, injection on/off)
+- **Multi-forecast:** Run all scenarios and overlay production profiles
+- **Summary table:** KPI comparison across scenarios
+
+#### App Reorganization
+
+- **7 workflow groups:**
+  1. Network — Build topology, solve
+  2. Wells & Reservoirs — Configure wells and tanks
+  3. Network Results — Nodal analysis, diagnostics
+  4. Forecast & Development — Production forecast, schedules
+  5. Optimization — Well-count, scenarios, debottleneck
+  6. Uncertainty & Risk — Monte Carlo, reliability (advanced)
+  7. Data & QA — Import/export, model assurance
+- **Consistent styling:** Colour-blind-validated palette (oil=aqua, gas=orange, water=blue)
+- **Realistic demo field:** Oil tank with aquifer, gas lift, water injection, separator capacity limit
+
+### Physics & Numerics
+
+- **Dogbox least-squares solver:** ~5 iterations per warm-start solve (vs. ~34 cold-start) → 5–7× faster forecasts
+- **Tank pressure propagation:** Applied in every solver path (network, nodal, calibration, optimization, forecast)
+- **Gas backpressure IPR:** Automatic for gas-tank wells (no solution gas)
+- **Homogeneous VLP:** Automatic for gas-tank wells (no-slip, avoids Beggs–Brill over-prediction)
+
+### Bug Fixes
+
+- **Solve status fell back to UNSOLVED** for models with tanks → fixed by fingerprinting pre-tank-link graph
+- **Canvas stale-update on Esc** → deferred updates now properly cancelled
+- **Pipeline Δp discontinuous at zero flow** → bridged linearly for |q| < 0.5 m³/d
+
+### Tests
+
+- 258 Python tests pass (14 new in `tests/test_v31_prognosis.py`)
+- Browser editor tests: 25/25 Chromium checks pass
+
+---
+
+## v30.2 — Merge with v29.1 + Deployment Fix
+
+**Release Date:** 2026-09-28
+
+### Critical Fix
+
+- **Deployment error `cannot import name 'DEFAULT_VLP_SEGMENTS'`:** Resolved by ensuring all changed files uploaded in one commit (not piecemeal)
+
+### Merged v29.1 Corrective Fixes
+
+- NaN/Inf rejection at CSV/project validation
+- Roughness calibration writes solver's `roughness_m`
+- Reliability uses exact intervals and clips final timestep
+- Stiff reservoir links avoid pressure-equalization overshoot
+- Run-manifest SHA-256 verification
+
+### Ported v29.1 Editor Features
+
+- Full palette: reservoir tank, separator stage, exports, gas source, gas injector
+- 860 px canvas
+- Reservoir-tank property panel
+
+### Solver & Tests
+
+- Dense Jacobian for networks with 1–2 unknowns (SciPy sparse path crashed)
+- 244/244 Python tests pass (232 v30.1 + 12 v29.1)
+- Browser editor tests: 20/20 pass
+
+---
+
+## v30.1 — Graph Editor & Editor→Solver Contract
+
+**Release Date:** 2026-09-26
+
+### Editor Enhancements
+
+- **Drag-to-connect:** Drag OUT port (right) to IN port (left) of target component
+  - Live dashed line follows cursor
+  - Valid targets highlight (green); invalid (red)
+  - Drop anywhere on target; Esc cancels
+- **Sidebar "Connect" removed:** Editor is only place to create connections
+- **Property panel:** Edit all connection and component parameters in one place
+
+### View & Performance
+
+- **Browser-local view:** Zoom, pan, Fit, Reset run entirely in React; no Streamlit rerun
+- **View persistence:** Zoom/pan maintained across reruns
+- **Mid-drag rerun handling:** Streamlit rerun deferred until gesture completes
+
+### Single Editor→Solver Contract (`ui/graph_contract.py`)
+
+- **Editor sends:** `{schema, rev, nodes, edges, selected}`
+- **Revision-based:** Only processes graph when `rev` is new (prevents Streamlit replay overwrites)
+- **Normalization:** `normalize_graph()` drops dangling, self-loops, duplicates; fills defaults
+- **Explicit states:** UNSOLVED → SOLVING → SOLVED/FAILED (shown in editor badge)
+
+### New Model Check
+
+- **LOOP_ELEVATION_MISMATCH:** Elevation changes around closed loop must sum to zero
+
+### Solver
+
+- First-solve pass shorter via well re-seeding on stable branch
+- Looped network solves from 8 s → <0.3 s
+
+### Tests
+
+- 232 Python tests pass
+- Browser editor tests: 20/20 Chromium checks
+
+---
+
+## v30 — Audit & Bug-Fix Release
+
+**Release Date:** 2026-09-20
+
+### Overview
+
+Complete audit of v29 (Streamlit GAP-style production network solver). All findings reproduced via unit tests, headless runs, and stress networks.
+
+### Critical Bugs Fixed
+
+1. **Canvas overwrote model on rerun** → revision-based state management
+2. **Stale widgets overwrote imports** → widget re-seeding on model change
+3. **Single-segment tubing (VLP)** → segmented with predictor–corrector
+4. **Well equation nested optimizer** → well rates now unknowns with IPR = VLP condition
+5. **Network ignored skin, gas lift, VLP model** → unified well model across all paths
+6. **Sink without pressure crashed solver** → clear BOUNDARY_WITHOUT_PRESSURE error
+7. **Control valve marked as topology error** → fixed edge type validation
+8. **Model QA never ran post-solve checks** → fixed dict/tuple mismatch
+9. **Water injectors took no flow** → added injectivity-index model
+
+### Physics & Numerics Corrected
+
+- Beggs–Brill uphill segregated coefficient: 3.539 (was 0.3692)
+- Holdup blend at intermittent/distributed boundary (smooth S-curve)
+- Friction factor blend at Re = 2000–4000 (smooth laminar–turbulent transition)
+- Pipeline Δp bridged linearly for |q| < 0.5 m³/d
+- Choke/valve Δp now signed (support reverse flow)
+- Pump head no longer clipped at zero (keeps falling)
+- Pipelines segmented (~1 per 1.5 km, up to 8)
+- Well solver applies highest-rate stable intersection (GAP convention)
+- Pressure starting guesses from nearest boundary (not fixed 80–90 bar)
+- Sparse Jacobian caching for 5–10× speedup per solve
+
+### Constraints (GAP-like)
+
+- Well `max_liquid_rate_m3d` enforced directly
+- Separator/export/connection capacity limits via **pro-rata choking**
+- Debottleneck screen re-solves with limits (not report-only)
+
+### UI/Data Robustness
+
+- NaN/Inf rejection at interchange and validation boundaries
+- Calibration lists free pressures only (fixed pressures are inputs)
+- Nodal tab defaults to solved WHP (not fixed 90 bar)
+- Unconnected components excluded from solve (with warning)
+- CSV interchange fixed for chokes, pumps, valves
+- JSON export handles numpy integer types
+
+### Tests
+
+- 228 Python tests pass (25 new regression tests in `tests/test_v30_audit.py`)
+- Headless run of all 17 UI tabs
+- Demo solve: converges in ~0.15 s (residual < 1e-12)
+- Back-pressure sweep: 20→80 bar, every case PASS < 0.5 s
+- 5-year forecast: 5 s (was 36 s)
+- 3-scenario run: 16 s (was 110 s)
+
+---
+
+## v29 — Scenario Management
+
+**Release Date:** 2026-08-15
+
+### Features
+
+- Immutable content-addressed snapshots
+- Branching and scenario lineage
+- Assumption registers
+- Structural diffs
+- Comparison tables
+- QA capture
+- Reproducible run manifests with SHA-256 verification
+
+### v29.1 Audit Additions
+
+- NaN/Inf rejection at interchange boundaries
+- Roughness calibration correctness
+- Reliability exact interval clipping
+- Stiff reservoir link safeguards
+- Run-manifest hash verification
+
+---
+
+## v28 — Engineering QA & Model Assurance
+
+**Release Date:** 2026-07-01
+
+### Features
+
+- Consolidated model-quality gate
+- Classification: PASS / REVIEW / FAIL
+- Topology checks, unit validation, solver convergence, residual closure
+- Operating constraint sanity checks
+- Forecast sanity checks
+- JSON export of all diagnostics
+
+---
+
+## v26 — Development Planning
+
+**Release Date:** 2026-06-01
+
+### Features
+
+- Dependency and resource-constrained task scheduling
+- Drilling/workover rig serialization
+- Event types: tieback, commissioning, facility, compression, shutdown, abandonment
+- Gantt visualization
+- Production-forecast consequences
+
+---
+
+## v25 — Reservoir Coupling
+
+**Release Date:** 2026-05-01
+
+### Features
+
+- Communicating reservoir tanks
+- Pressure-dependent aquifer support
+- Injector–tank connectivity
+- Auditable voidage accounting
+- Exact horizon clipping
+- Dedicated Reservoir Coupling workspace
+
+---
+
+## v24 — Reliability & Availability
+
+**Release Date:** 2026-04-01
+
+### Features
+
+- Seeded failure/repair Monte Carlo
+- Planned outages
+- Redundancy modeling
+- Availability percentiles
+- Deferred-production screening
+
+See `RELIABILITY_V24.md` for details.
+
+---
+
+## v20 — Well Performance
+
+**Release Date:** 2026-02-15
+
+### Features
+
+- Enhanced nodal analysis
+- Selectable Beggs-Brill / Homogeneous VLP
+- Gas-lift screening and optimization
+- Generic ESP affinity-law performance and envelopes
+- Well QA
+
+See `WELL_PERFORMANCE_V20.md` for details.
+
+---
+
+## v17.2 — Unit Systems Hardening
+
+**Release Date:** 2026-01-20
+
+### Features
+
+- Explicit engineering-unit boundary
+- Norwegian SI profile (bar, °C, m, Sm³/d, kW)
+- Field profile (psi, °F, ft, stb/d, hp)
+- Standard-volume reference: 15 °C, 1.01325 bara
+- PVT absolute pressure; gauge/absolute helpers
+
+---
+
+## v17.1 — Uncertainty Audit
+
+**Release Date:** 2025-12-15
+
+### Features
+
+- Physical sample bounds with explicit clip/reject policy
+- Correlation validation (finite, PSD)
+- Realization diagnostics and survivor-bias warning
+- P10/P50/P90 convergence by realization count
+- Spearman rank sensitivity
+- Reproducibility metadata in Monte Carlo exports
+
+---
+
+## v17 — Uncertainty & Monte Carlo
+
+**Release Date:** 2025-11-01
+
+### Features
+
+- Seeded Latin-hypercube and random sampling
+- Rank-style Gaussian correlation
+- Parameter overrides
+- P90/P50/P10 production metrics
+- Realization exports
+- Bounded development-decision optimization
+
+---
+
+## v16.1 — Field Development Audit
+
+**Release Date:** 2025-09-15
+
+### Features
+
+- Schedule integrity audit
+- Cumulative accounting
+- Scenario isolation
+- Export/audit consistency
+- Deterministic development forecasting
+
+---
+
+## v14 — Professional Solver Baseline
+
+**Release Date:** 2025-08-01
+
+### Features
+
+- Residual quality gate and normalized residual score
+- Pressure/rate scaling metadata
+- Hard/soft constraint classification
+- Active/near-active constraint reporting
+- Debottleneck screening
+- Multi-scenario runner
+- Calculation audit JSON
+
+---
+
+## Known Limitations
+
+- **PVT:** Screening black-oil with fixed Pb = 150 bar, Rsb = 120 Sm³/Sm³
+- **Gas networks:** Liquid-rate formulation (screening only)
+- **Shut-in:** Rule applied post-solve, not mixed-integer
+- **Gas-lift:** Input (not allocation variable in optimization)
+
+---
+
+## Contributing & Support
+
+See README.md for links to USER_GUIDE.md, API_REFERENCE.md, and TROUBLESHOOTING.md.
+
+For issues or questions, open an issue on GitHub or contact the author.
+
+---
+
+**Made by Merouane Hamdani — For non-commercial use — Independent engineering prototype.**
+
+FieldNet is a screening and planning tool. All results must be validated against offset data and lab measurements before operational decisions.

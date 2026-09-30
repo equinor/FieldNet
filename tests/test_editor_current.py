@@ -20,11 +20,12 @@ def test_demo_solve_produces_explicit_solved_state_contract():
     assert p and q
 
 def test_app_wires_explicit_solver_state_and_large_canvas():
-    app=(ROOT/'app.py').read_text()
-    assert "network_solve_state" in app
-    assert "'status':'SOLVED' if ok else 'FAILED'" in app
+    # v30.1+: solve state lives in the single editor->solver contract (ui/graph_contract.py)
+    app=(ROOT/'app.py').read_text(); contract=(ROOT/'ui/graph_contract.py').read_text()
+    assert 'solve_status(st.session_state)' in app and 'run_solve(st.session_state' in app
+    assert "SOLVED if ok else FAILED" in contract
     assert 'height=860' in app
-    assert 'push final solve payload on a fresh render' in app
+    assert 'The editor above has already been sent with the SOLVING badge' in app
     assert "canvas_tanks=[n for n in st.session_state.nodes if n.get('kind')=='reservoir']" in app
 
 def test_reservoir_node_is_valid_solver_pressure_boundary():
