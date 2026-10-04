@@ -3,17 +3,35 @@ from datetime import datetime
 from solver.steady_state import solve_network
 
 
-def solve_step(nodes, edges, guess=None, enforce_constraints=False, step_solver=None):
-    """One forecast timestep: warm-started from the previous step and, optionally,
-    honouring facility capacity limits by pro-rata well choking, or by the field optimiser
-    (``step_solver(nodes, edges, guess) -> (p, q, info, d)``, see optimization.field_optimizer.make_step_solver)."""
-    if step_solver is not None: return step_solver(nodes,edges,guess)
+def _solve_step_one(nodes, edges, guess=None, enforce_constraints=False):
+    """Plain / constrained solve of one network (top-level so a process pool can pickle it)."""
     if enforce_constraints:
         from solver.v21 import enforce_capacity_constraints
         (p,q,info,d),_,actions=enforce_capacity_constraints(nodes,edges,lambda ns,es,g: solve_network(ns,es,initial_guess=g),initial_guess=guess)
         info=dict(info); info['constraint_actions']=actions
         return p,q,info,d
     return solve_network(nodes,edges,initial_guess=guess)
+
+
+def _solve_component_task(args):
+    return _solve_step_one(*args)
+
+
+def solve_step(nodes, edges, guess=None, enforce_constraints=False, step_solver=None, workers=1):
+    """One forecast timestep: warm-started from the previous step and, optionally,
+    honouring facility capacity limits by pro-rata well choking, or by the field optimiser
+    (``step_solver(nodes, edges, guess) -> (p, q, info, d)``, see optimization.field_optimizer.make_step_solver)."""
+    if step_solver is not None: return step_solver(nodes,edges,guess)
+    if int(workers or 1)>1:
+        # Independent connected systems do not couple, so each is solved in its own process (a single connected network cannot be split).
+        from network.parallel_solve import split_components, merge_results
+        comps=[c for c in split_components(nodes,edges) if c[1] or len(c[0])>1]
+        if len(comps)>1:
+            from network.uncertainty import parallel_map
+            res=parallel_map(_solve_component_task,[(n,e,guess,enforce_constraints) for n,e in comps],min(int(workers),len(comps)))
+            p,q,info,d=merge_results(res); info['constraint_actions']=info.get('constraint_actions',[])
+            return p,q,info,d
+    return _solve_step_one(nodes,edges,guess,enforce_constraints)
 
 
 def next_guess(p,q,info):
@@ -62,7 +80,7 @@ def _step_rates(nn, details, info, tanks, edges=None, flows=None):
 
 
 def iter_forecast(nodes, edges, start_date, years=5, step_days=30, events=None, depletion=None, enforce_constraints=False,
-                  max_tank_dp_bar=None, max_substeps=24, step_solver=None, store_elements=True):
+                  max_tank_dp_bar=None, max_substeps=24, step_solver=None, store_elements=True, workers=1, vlp_segments=None):
     """Generator version of :func:`run_forecast` so a UI can show progress, pause, resume or stop.
 
     Yields event dicts ``{'type': 'stage'|'step'|'done', 'stage', 'step', 'n_steps', 'date', 'day', 'horizon_days', 'substep',
@@ -83,7 +101,10 @@ def iter_forecast(nodes, edges, start_date, years=5, step_days=30, events=None, 
     import copy as _copy
     from datetime import timedelta
     from network.reservoir_mb import tanks_from_nodes, apply_tank_links, communication_transfers
-    base=copy.deepcopy(nodes); dep=depletion or {}; state={}; guess=None
+    base=copy.deepcopy(nodes); dep=depletion or {}; state={}; guess=None; workers=int(workers or 1)
+    if vlp_segments:   # run-speed option: fewer tubing segments per well VLP (explicit per-well settings are kept)
+        for n in base:
+            if n['kind']=='well' and 'vlp_segments' not in (n.get('params') or {}): n.setdefault('params',{})['vlp_segments']=int(vlp_segments)
     tanks=tanks_from_nodes(base)
     for n in base:
         if n['kind']=='well':
@@ -122,7 +143,7 @@ def iter_forecast(nodes, edges, start_date, years=5, step_days=30, events=None, 
                 from network.prediction_sources import apply_prediction_sources
                 nn=apply_prediction_sources(nn,date,start_date,{k:dict(v) for k,v in state.items()})
             except ImportError: pass
-        p,q,info,details=solve_step(nn,ee,guess,enforce_constraints,step_solver); guess=next_guess(p,q,info)
+        p,q,info,details=solve_step(nn,ee,guess,enforce_constraints,step_solver,workers); guess=next_guess(p,q,info)
         last_pq['p']=p; last_pq['q']=q
         return nn,info,details
 
@@ -213,11 +234,11 @@ def iter_forecast(nodes, edges, start_date, years=5, step_days=30, events=None, 
 
 
 def run_forecast(nodes, edges, start_date, years=5, step_days=30, events=None, depletion=None, enforce_constraints=False,
-                 max_tank_dp_bar=None, max_substeps=24, step_solver=None, progress=None, store_elements=True):
+                 max_tank_dp_bar=None, max_substeps=24, step_solver=None, progress=None, store_elements=True, workers=1, vlp_segments=None):
     """Run :func:`iter_forecast` to completion. ``progress(event)`` is called for every event; returning ``False`` stops the
     run early and returns the partial result with ``['stopped']=True``."""
     last=None
-    for ev in iter_forecast(nodes,edges,start_date,years,step_days,events,depletion,enforce_constraints,max_tank_dp_bar,max_substeps,step_solver,store_elements):
+    for ev in iter_forecast(nodes,edges,start_date,years,step_days,events,depletion,enforce_constraints,max_tank_dp_bar,max_substeps,step_solver,store_elements,workers,vlp_segments):
         if ev.get('result') is not None: last=ev['result']
         if progress is not None and progress(ev) is False:
             last=dict(last or {}); last['stopped']=True; return last

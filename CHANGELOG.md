@@ -6,6 +6,12 @@ Version history and major releases. See [AUDIT_V30.md](AUDIT_V30.md) for detaile
 
 **Release Date:** 2026-10-04 - see TEMPLATES_V32_6.md
 
+### Development schedule: pause / parallel / speed
+- **Pause / Continue / Stop are back for the drilling-schedule run.** The drilling run was synchronous and bypassed the run controller; it is now a generator (`ui.drilling_plan.iter_drill`) driven by the same `RunController` as the plain forecast. The progress bar spans both phases (scheduled plan, then the all-wells-at-start comparison); stopping keeps the partial scheduled-plan snapshot.
+- **The Compute → worker setting is now honoured by the Development schedule / forecast.** (a) Independent connected systems inside each timestep are solved in separate processes (`solve_step(..., workers)`); (b) the "all wells at start" comparison runs in a second process alongside the plan when workers ≥ 2 (not with the field optimiser, whose solver cannot be sent to another process). A single connected network cannot be split across cores, so a one-platform field gets no gain from workers.
+- **Run speed** selector (Accurate 12 / Balanced 6 / Fast 4 tubing segments). Well VLP is ~80 % of the run time and grows with the number of wells; on a 30-well test field Balanced is ~1.8x faster with oil rate within ~0.3 %. Explicit per-well `vlp_segments` are kept.
+- Tests: `tests/test_run_control_drill.py`.
+
 ### New
 - **18 loadable templates** (`network/templates.py`, `ui/templates_view.py`; Cases & Data → Templates & examples): HPHT 4-slot subsea gas template, daisy chain, several communicating tanks with dual-zone wells, oil with gas injection, pure depletion, wellhead platform tied back to a host, subsea booster pump, subsea and topside compressors, horizontal wells, HPHT tight gas with fractured wells, gas lift, ESP, waterflood, gas-condensate tieback, onshore gas gathering, plus two learning examples. Each has a description, what to watch and suggested forecast settings; load into the editor or as a new case.
 - Forecast tab picks up the template's suggested start / horizon / step.

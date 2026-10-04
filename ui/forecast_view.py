@@ -23,6 +23,14 @@ def _step_solver(st):
     except Exception: return None
 
 
+SPEEDS = {'Accurate (12 tubing segments)': None, 'Balanced (6 segments, ~2x faster)': 6, 'Fast (4 segments, ~2x faster, coarse)': 4}
+
+
+def _workers(st):
+    try: return max(1, int((st.session_state.get('compute') or {}).get('workers', 1)))
+    except Exception: return 1
+
+
 def fmt(v, unit='', scale=1.0, digits=0):
     if v is None: return '—'
     return f"{v/scale:,.{digits}f}{(' ' + unit) if unit else ''}"
@@ -101,6 +109,10 @@ def _drive_run(st, nodes, edges):
         if ctl.status == ctl.FAILED: st.error(f'Forecast failed: {ctl.error}')
     if ctl.snapshot is not None:
         st.session_state.forecast = ctl.snapshot; st.session_state.forecast_hash = st.session_state.get('fc_ctl_hash')
+    sink = getattr(ctl, 'sink', None)
+    if sink and sink.get('res') is not None and ctl.status == ctl.DONE:
+        st.session_state.sched_result = sink['res']; st.session_state.sched_base = sink.get('base'); st.session_state['_fc_mode'] = 'drill'
+        st.session_state.forecast = sink['res']['forecast']
     n = len((ctl.snapshot or {}).get('field', []))
     if ctl.status == ctl.PAUSED: msg.info(f'⏸ Paused after {n} timestep(s) ({ctl.fraction:.0%}). Results below are partial — press Continue to resume from here.')
     elif ctl.status == ctl.STOPPED: msg.warning(f'⏹ Stopped by user after {n} timestep(s) ({ctl.fraction:.0%}). Results below are partial (forecast stops at the last completed step).')
@@ -149,6 +161,10 @@ def render_forecast(st, nodes, edges):
             from ui import drilling_plan as dp
             rigs, drill_df = dp.table(st, nodes)
             compare = st.toggle('Compare with all wells on stream at start', value=True, key='sch_cmp')
+        sp_name = st.selectbox('Run speed', list(SPEEDS), index=0, key='fc_speed',
+                               help='Most of the run time is the well tubing (VLP) calculation, which grows with the number of wells. Fewer tubing segments is roughly twice as fast and changes rates by well under 1 % on test fields. Per-well "vlp_segments" settings are always kept.')
+        vseg = SPEEDS.get(sp_name); wk = _workers(st)
+        st.caption(f'Parallel: {wk} worker process(es) from the Compute settings — used for independent connected systems inside each step' + (' and to run the "all wells at start" comparison alongside the plan.' if use_drill and compare else '.') + ' A single connected network cannot be split across cores.')
         _ctl0 = st.session_state.get('fc_ctl')
         if _ctl0 is not None: style_button(st, 'fc_run', {'done': 'done', 'running': 'running', 'paused': 'running', 'failed': 'failed'}.get(_ctl0.status, 'none'))
         run = st.button('▶ Run forecast', type='primary', use_container_width=True, key='fc_run')
@@ -157,12 +173,10 @@ def render_forecast(st, nodes, edges):
         ids = {str(x.get('id')) for x in [*nodes, *edges]}; events = [e for e in events_to_forecast(sched) if e['target_id'] in ids]
         old = st.session_state.get('fc_ctl')
         if old is not None and old.active: old.stop()
-        bar = st.progress(0.0, text='Development plan…')
-        try:
-            res, base = dp.run(nodes, edges, start, float(years), int(step), bool(caps), drill_df, rigs, events, compare, _step_solver(st), progress=lambda f, t: bar.progress(min(max(f, 0.0), 1.0), text=t))
-            st.session_state.sched_result = res; st.session_state.sched_base = base; st.session_state.forecast = res['forecast']
-            st.session_state.forecast_hash = graph_hash(nodes, edges); st.session_state['_fc_mode'] = 'drill'; bar.progress(1.0, text='Finished')
-        except Exception as exc: st.error(f'Development plan failed: {exc}')
+        st.session_state['_fc_mode'] = 'plain'; st.session_state.pop('sched_result', None); st.session_state.pop('sched_base', None)
+        sink = {}
+        ctl = RunController(dp.iter_drill(nodes, edges, start, float(years), int(step), bool(caps), drill_df, rigs, events, compare, _step_solver(st), workers=wk, vlp_segments=vseg, sink=sink), label='Development plan')
+        ctl.sink = sink; st.session_state.fc_ctl = ctl; st.session_state.fc_ctl_hash = graph_hash(nodes, edges)
     elif run:
         st.session_state['_fc_mode'] = 'plain'; st.session_state.pop('sched_result', None); st.session_state.pop('sched_base', None)
         ids = {str(x.get('id')) for x in [*nodes, *edges]}
@@ -172,7 +186,7 @@ def render_forecast(st, nodes, edges):
         old = st.session_state.get('fc_ctl')
         if old is not None and old.active: old.stop()
         st.session_state.fc_ctl = RunController(iter_forecast(nodes, edges, start, float(years), int(step), events, dep, enforce_constraints=bool(caps),
-                                                              step_solver=_step_solver(st), store_elements=bool(store_el)))
+                                                              step_solver=_step_solver(st), store_elements=bool(store_el), workers=wk, vlp_segments=vseg))
         st.session_state.fc_ctl_hash = graph_hash(nodes, edges)
     _drive_run(st, nodes, edges)
     fc = st.session_state.get('forecast')
