@@ -3,9 +3,11 @@ from datetime import datetime
 from solver.steady_state import solve_network
 
 
-def solve_step(nodes, edges, guess=None, enforce_constraints=False):
+def solve_step(nodes, edges, guess=None, enforce_constraints=False, step_solver=None):
     """One forecast timestep: warm-started from the previous step and, optionally,
-    honouring facility capacity limits by pro-rata well choking."""
+    honouring facility capacity limits by pro-rata well choking, or by the field optimiser
+    (``step_solver(nodes, edges, guess) -> (p, q, info, d)``, see optimization.field_optimizer.make_step_solver)."""
+    if step_solver is not None: return step_solver(nodes,edges,guess)
     if enforce_constraints:
         from solver.v21 import enforce_capacity_constraints
         (p,q,info,d),_,actions=enforce_capacity_constraints(nodes,edges,lambda ns,es,g: solve_network(ns,es,initial_guess=g),initial_guess=guess)
@@ -56,7 +58,7 @@ def _step_rates(nn, details, info, tanks):
 
 
 def run_forecast(nodes, edges, start_date, years=5, step_days=30, events=None, depletion=None, enforce_constraints=False,
-                 max_tank_dp_bar=None, max_substeps=24):
+                 max_tank_dp_bar=None, max_substeps=24, step_solver=None):
     """Quasi-steady life-of-field forecast.
 
     Each timestep: apply schedule events -> give linked wells their tank pressure ->
@@ -68,37 +70,46 @@ def run_forecast(nodes, edges, start_date, years=5, step_days=30, events=None, d
     """
     import copy as _copy
     from datetime import timedelta
-    from network.reservoir_mb import tanks_from_nodes, apply_tank_links
+    from network.reservoir_mb import tanks_from_nodes, apply_tank_links, communication_transfers
     base=copy.deepcopy(nodes); dep=depletion or {}; state={}; guess=None
     tanks=tanks_from_nodes(base)
     for n in base:
         if n['kind']=='well':
             p=n.get('params',{}); state[n['id']]={'pr':float(p.get('reservoir_pressure_bar',200.0)),'cum_liq':0.0,'cum_oil':0.0,'cum_gas':0.0,'cum_wat':0.0}
-    rows=[]; well_rows=[]; constraint_rows=[]; tank_rows=[]; t=0
+    rows=[]; well_rows=[]; constraint_rows=[]; tank_rows=[]; node_rows=[]; edge_rows=[]; t=0
     cum={'oil':0.0,'gas':0.0,'wat':0.0,'winj':0.0}
     horizon_days=max(int(round(years*DAYS_PER_YEAR)),0)
     t0=datetime.fromisoformat(str(start_date))
 
-    def solve_now(nn0):
+    last_pq={}
+    def solve_now(nn0, date=None):
         nonlocal guess
         nn=_copy.deepcopy(nn0)
         for n in nn:
             if n['kind']=='well' and n['id'] in state and not (n.get('params') or {}).get('reservoir_id') in tanks:
                 n.setdefault('params',{})['reservoir_pressure_bar']=state[n['id']]['pr']
         nn=apply_tank_links(nn,tanks)
-        p,q,info,details=solve_step(nn,ee,guess,enforce_constraints); guess=next_guess(p,q,info)
+        # Per-well decline curves / external-simulator profiles override the tank-derived inputs
+        # (optional module; see network/prediction_sources.py).
+        if date is not None:
+            try:
+                from network.prediction_sources import apply_prediction_sources
+                nn=apply_prediction_sources(nn,date,start_date,{k:dict(v) for k,v in state.items()})
+            except ImportError: pass
+        p,q,info,details=solve_step(nn,ee,guess,enforce_constraints,step_solver); guess=next_guess(p,q,info)
+        last_pq['p']=p; last_pq['q']=q
         return nn,info,details
 
     while t <= horizon_days:
         dt_days=min(step_days, max(horizon_days-t, 0))
         date=(t0+timedelta(days=t)).date().isoformat()
         nn0,ee=apply_events(base,edges,events,date)
-        try: nn,info,details=solve_now(nn0)
+        try: nn,info,details=solve_now(nn0,date)
         except Exception as exc:
             rows.append({'Date':date,'Day':t,'Total liquid [m3/d]':0.0,'Oil [m3/d]':0.0,'Water [m3/d]':0.0,'Gas [Sm3/d]':0.0,'Water injection [m3/d]':0.0,'Cumulative liquid [m3]':sum(s['cum_liq'] for s in state.values()),'Cumulative oil [Sm3]':cum['oil'],'Cumulative gas [Sm3]':cum['gas'],'Cumulative water [m3]':cum['wat'],'Wells flowing':0,'Violations':0,'Converged':False,'Message':str(exc)})
             if dt_days<=0: break
             t+=dt_days; continue
-        first_info=info; first_details=details; first_nn=nn
+        first_info=info; first_details=details; first_nn=nn; first_pq=(dict(last_pq.get('p') or {}),dict(last_pq.get('q') or {}))
         vol={'liq':0.0,'oil':0.0,'wat':0.0,'gas':0.0,'winj':0.0}; wvol={}; rem=float(dt_days); nsub=0; converged=bool(info.get('success'))
         while True:
             wells,per_tank,winj=_step_rates(nn,details,info,tanks)
@@ -112,8 +123,11 @@ def run_forecast(nodes, edges, start_date, years=5, step_days=30, events=None, d
                 lim=max_tank_dp_bar if max_tank_dp_bar else max(2.0,0.03*p0)
                 if rate_dp>1e-12: sub=min(sub,max(lim/rate_dp,rem/max_substeps))
             sub=min(sub,rem)
+            xfer=communication_transfers(tanks,sub) if any(tk.comm for tk in tanks.values()) else {}
             for tid,tk in tanks.items():
                 v=per_tank[tid]; tk.step(v['oil']*sub,v['wat']*sub,v['gas']*sub,v['winj']*sub,v['ginj']*sub,sub)
+            for tid,vol_ in xfer.items():
+                if abs(vol_)>0: tanks[tid].exchange(vol_)
             for wid,w in wells.items():
                 st=state[wid]; st['cum_liq']+=w['liq']*sub; st['cum_oil']+=w['oil']*sub; st['cum_gas']+=w['gas']*sub; st['cum_wat']+=w['wat']*sub
                 a=wvol.setdefault(wid,{'liq':0.0,'oil':0.0,'wat':0.0,'gas':0.0}); 
@@ -129,7 +143,7 @@ def run_forecast(nodes, edges, start_date, years=5, step_days=30, events=None, d
             vol['winj']+=winj*sub
             rem-=sub; nsub+=1
             if rem<=1e-9: break
-            try: nn,info,details=solve_now(nn0); converged=converged and bool(info.get('success'))
+            try: nn,info,details=solve_now(nn0,date); converged=converged and bool(info.get('success'))
             except Exception: converged=False; break
         if dt_days>0:
             avg={k:vol[k]/dt_days for k in vol}; wavg={wid:{k:v[k]/dt_days for k in v} for wid,v in wvol.items()}
@@ -143,6 +157,14 @@ def run_forecast(nodes, edges, start_date, years=5, step_days=30, events=None, d
             dd=first_details[n['id']]; prm=n.get('params',{}); w=wavg.get(n['id'],{'liq':0.0,'oil':0.0,'wat':0.0,'gas':0.0}); rid=prm.get('reservoir_id')
             well_rows.append({'Date':date,'Well':n['name'],'Well ID':n['id'],'Tank':tanks[rid].name if rid in tanks else '—','Status':dd.get('status'),'Liquid [m3/d]':w['liq'],'Oil [m3/d]':w['oil'],'Water [m3/d]':w['wat'],'Gas [Sm3/d]':w['gas'],'Reservoir pressure [bar]':float(prm.get('reservoir_pressure_bar',0.0)),'WHP [bar]':dd['whp_bar'],'BHP [bar]':dd['bhp_bar'],'Cumulative liquid [m3]':state[n['id']]['cum_liq'],'Cumulative oil [Sm3]':state[n['id']]['cum_oil']})
         for tid,tk in tanks.items(): tank_rows.append({'Date':date,**tk.row()})
+        try:
+            from network.element_results import element_rows
+            nr,er=element_rows(first_nn,ee,first_pq[0],first_pq[1],first_details,first_info,date)
+            node_rows.extend(nr); edge_rows.extend(er)
+        except ImportError:
+            names={x['id']:x.get('name',x['id']) for x in first_nn}
+            node_rows.extend({'Date':date,'Node ID':k,'Name':names.get(k,k),'Pressure [bar]':v} for k,v in first_pq[0].items())
+            edge_rows.extend({'Date':date,'Edge ID':k,'Name':k,'Flow [m3/d]':v} for k,v in first_pq[1].items())
         for c in first_info.get('constraints',[]): constraint_rows.append({'Date':date,**c})
         tl=avg['liq']; flowing=sum(1 for w in wavg.values() if w['liq']>1e-6)
         row={'Date':date,'Day':t,'Total liquid [m3/d]':tl,'Oil [m3/d]':avg['oil'],'Water [m3/d]':avg['wat'],'Gas [Sm3/d]':avg['gas'],'Water injection [m3/d]':avg['winj'],
@@ -153,5 +175,5 @@ def run_forecast(nodes, edges, start_date, years=5, step_days=30, events=None, d
         rows.append(row)
         if dt_days<=0: break
         t+=dt_days
-    return {'field':rows,'wells':well_rows,'constraints':constraint_rows,'tanks':tank_rows,'final_state':state,
+    return {'field':rows,'wells':well_rows,'constraints':constraint_rows,'tanks':tank_rows,'nodes':node_rows,'edges':edge_rows,'final_state':state,
             'recovery':[tk.row() for tk in tanks.values()]}

@@ -7,8 +7,17 @@ from network.prognosis import forecast_kpis
 from ui import charts
 from ui.graph_contract import graph_hash
 from ui.widgets import clean_text
+from ui.schedule_builder import render_event_builder, events_to_forecast
 
 DEFAULT_START = pd.Timestamp('2026-01-01').date()
+
+
+
+def _step_solver(st):
+    try:
+        from network.solve_options import make_step_solver
+        return make_step_solver(st.session_state.get('compute'))
+    except Exception: return None
 
 
 def fmt(v, unit='', scale=1.0, digits=0):
@@ -73,23 +82,17 @@ def render_forecast(st, nodes, edges):
                     dep[w['id']] = {'pressure_decline_bar_per_1000m3': c1.number_input(f"{w['name']} decline [bar/1000 m³]", 0.0, 10.0, float((w.get('params') or {}).get('pressure_decline_bar_per_1000m3', 0.03)), 0.01, key='dec' + w['id']),
                                     'pressure_support_bar_per_day': c2.number_input(f"{w['name']} support [bar/day]", 0.0, 5.0, float((w.get('params') or {}).get('pressure_support_bar_per_day', 0.0)), 0.001, key='sup' + w['id'])}
         with st.expander('Schedule events (optional)'):
-            st.caption('date (YYYY-MM-DD) · target (ID) · field, e.g. `params.available`, `pressure_bar`, `params.max_liquid_rate_m3d` · value')
-            evdf = st.data_editor(pd.DataFrame({'date': pd.Series(dtype=str), 'target_id': pd.Series(dtype=str), 'field': pd.Series(dtype=str), 'value': pd.Series(dtype=str)}),
-                                  num_rows='dynamic', use_container_width=True, key='forecast_events')
+            st.caption('Shut in or start up wells, change rate limits, separator pressure, flowline diameter ... Pick the event, the element and the date; values use your unit profile. The same schedule is used by the Development schedule and Scenarios tabs.')
+            sched = render_event_builder(st, nodes, edges, None, st.session_state.get('unit_profile', 'norwegian_si'), key_prefix='evb_fc', start_date=start)
         run = st.button('▶ Run forecast', type='primary', use_container_width=True, key='fc_run')
     if run:
-        events = []; bad = []; ids = {str(x.get('id')) for x in [*nodes, *edges]}
-        for row in evdf.to_dict('records'):
-            dte, tid, fld = clean_text(row.get('date')), clean_text(row.get('target_id')), clean_text(row.get('field'))
-            if not (dte and tid and fld): continue
-            try: dte = pd.Timestamp(dte).date().isoformat()
-            except Exception: bad.append(f'bad date {dte!r}'); continue
-            if tid not in ids: bad.append(f'unknown target {tid!r}'); continue
-            events.append({'date': dte, 'target_id': tid, 'field': fld, 'value': _coerce_value(row.get('value'))})
+        ids = {str(x.get('id')) for x in [*nodes, *edges]}
+        bad = [f'unknown target {e.target_id!r}' for e in sched if str(e.target_id) not in ids]
+        events = [e for e in events_to_forecast(sched) if e['target_id'] in ids]
         if bad: st.error('Ignored events: ' + ', '.join(bad))
         with st.spinner('Forecasting: re-solving the network at every step...'):
             try:
-                st.session_state.forecast = run_forecast(nodes, edges, start, float(years), int(step), events, dep, enforce_constraints=bool(caps))
+                st.session_state.forecast = run_forecast(nodes, edges, start, float(years), int(step), events, dep, enforce_constraints=bool(caps), step_solver=_step_solver(st))
                 st.session_state.forecast_hash = graph_hash(nodes, edges)
             except Exception as exc: st.error(f'Forecast failed: {exc}')
     fc = st.session_state.get('forecast')

@@ -137,6 +137,13 @@ class TestShutdownOptimizerBasics:
 class TestEnumeration:
     """Test binary enumeration of shut-in scenarios."""
 
+    # TEST FIX: the test labelled W2 (20 m3/d) as "below minimum" but set
+    # min_rate_m3d=10, so W2 actually satisfies the constraint (20 >= 10, BHP
+    # floor 0). Since shutting in a feasible producer only loses oil, the
+    # optimizer correctly keeps both wells flowing; the old expectation
+    # contradicted the stated objective (maximize oil subject to constraints).
+    # The minimum is raised to 30 m3/d so W2 is genuinely infeasible while W1
+    # (100 m3/d) is not, which is what the scenario intends to exercise.
     def test_enumeration_two_wells(self):
         """Test enumeration with 2 wells (4 scenarios)."""
         nodes = [
@@ -163,7 +170,7 @@ class TestEnumeration:
         optimizer = ShutdownOptimizer(
             nodes,
             edges,
-            min_rate_m3d=10.0,  # W2 below minimum
+            min_rate_m3d=30.0,  # W2 (20 m3/d) below minimum
             min_bhp_bar=0.0,
             solve_func=mock_solver,
         )

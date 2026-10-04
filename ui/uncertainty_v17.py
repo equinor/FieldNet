@@ -4,7 +4,8 @@ import json
 import pandas as pd
 import plotly.express as px
 from network.field_development import DevelopmentScenario
-from network.uncertainty import UncertainParameter, MonteCarloConfig, run_monte_carlo
+from network.uncertainty import UncertainParameter, MonteCarloConfig, run_monte_carlo, default_workers
+from network import risk_profiles as rp
 from ui.widgets import clean_num, clean_text
 
 PARAM_COLS=['name','target_id','path','operation','distribution','low','mode','high','mean','std','physical_min','physical_max','bound_policy']
@@ -22,12 +23,60 @@ def parse_uncertainty_rows(rows):
 def export_mc_csv(result): return pd.DataFrame(result.get('runs',[])).to_csv(index=False)
 def export_mc_json(result): return json.dumps(result,indent=2,default=str)
 
+# ---- production-profile helpers (pure; unit-tested without Streamlit) ----
+PROFILE_TABS=[('Rates','Rate'),('Cumulative','Cumulative'),('Pressures','Pressure')]
+def get_profiles_df(result,cache=None):
+    """Rebuild (and optionally cache by result identity) the profiles DataFrame; empty frame when absent."""
+    recs=(result or {}).get('profiles')
+    if not recs: return rp.profiles_from_records([])
+    if cache is not None and cache.get('src') is result and cache.get('df') is not None: return cache['df']
+    df=rp.profiles_from_records(recs)
+    if cache is not None: cache['src']=result; cache['df']=df
+    return df
+def profile_variable_options(df,category):
+    """Variable names of a category, in display order (system/tank/node-group before individual nodes)."""
+    ls=rp.list_series(df,category)
+    if ls.empty: return []
+    order={'System':0,'Tank':1,'Node group':2,'Node':3,'Rate':0,'Cumulative':0}
+    ls=ls.assign(_o=[order.get(g,9) for g in ls['Group']]).sort_values('_o',kind='stable')
+    return list(ls['Variable'])
+def export_profiles_csv(result,wide=False): return rp.profiles_to_csv(get_profiles_df(result),wide=wide)
+def export_profiles_json(result):
+    return json.dumps({'application':result.get('application'),'seed':result.get('seed'),'convention':rp.CONVENTION_NOTE,'series_meta':result.get('series_meta',{}),'profiles':result.get('profiles',[])},default=str)
+
+def _render_profiles(st,r):
+    from ui import risk_charts
+    df=get_profiles_df(r,st.session_state.setdefault('v17_prof_cache',{}))
+    st.markdown('### Production profiles (total system)')
+    meta=r.get('series_meta',{})
+    st.caption(f"{rp.CONVENTION_NOTE}. Cumulatives are computed per realization before percentiling. Based on {meta.get('realizations_used','?')} successful realizations; N per date is in the tables.")
+    for note in meta.get('notes',[]): st.info(note)
+    if df.empty: st.warning('No profile data was retained for this run.'); return
+    tabs=st.tabs([t for t,_ in PROFILE_TABS])
+    for tab,(label,cat) in zip(tabs,PROFILE_TABS):
+        with tab:
+            opts=profile_variable_options(df,cat)
+            if not opts: st.caption(f'No {label.lower()} series available.'); continue
+            var=st.selectbox('Variable',opts,key=f'v17_prof_var_{cat}')
+            st.plotly_chart(risk_charts.fan_chart(df,var),use_container_width=True)
+            nd=st.slider('Dates in table',3,20,8,key=f'v17_prof_nd_{cat}')
+            u=df[df['Variable']==var]['Unit'].iloc[0]
+            st.markdown(f'**{var} [{u}] at selected dates**')
+            st.dataframe(rp.profile_table(df,var,n_dates=int(nd)),hide_index=True,use_container_width=True)
+    st.markdown('**End-of-horizon reserves / cumulative volumes**')
+    st.dataframe(rp.reserves_table(df),hide_index=True,use_container_width=True)
+    d1,d2,d3=st.columns(3)
+    d1.download_button('Download profiles CSV (tidy)',export_profiles_csv(r),'fieldnet_profiles_tidy.csv','text/csv',use_container_width=True)
+    d2.download_button('Download profiles CSV (wide)',export_profiles_csv(r,wide=True),'fieldnet_profiles_wide.csv','text/csv',use_container_width=True)
+    d3.download_button('Download profiles JSON',export_profiles_json(r),'fieldnet_profiles.json','application/json',use_container_width=True)
+
 def render_uncertainty(st,nodes,edges):
     st.subheader('Uncertainty, Monte Carlo & Risk')
     st.caption('Planning-level probabilistic wrapper around the deterministic production engine. P90 is conservative and P10 optimistic for production/reserves-style metrics. Samples are reproducible from the displayed seed.')
     c1,c2,c3,c4=st.columns(4)
     start=c1.date_input('MC start date',key='v17_start').isoformat(); years=c2.number_input('MC horizon [years]',0.03,50.0,1.0,0.5,key='v17_years'); step=c3.selectbox('MC timestep [days]',[10,30,60,90],index=1,key='v17_step'); samples=c4.number_input('Samples',5,1000,50,5,key='v17_samples')
     c5,c6=st.columns(2); seed=c5.number_input('Random seed',0,2_147_483_647,1701,1,key='v17_seed'); method=c6.selectbox('Sampling',['lhs','random'],key='v17_method')
+    c7,c8=st.columns(2); maxw=default_workers(); workers=c7.number_input('Compute workers',1,maxw,1,1,key='v17_workers',help='Parallel processes for realizations (results identical to serial). Upper bound = min(CPUs-1, 8).'); store=c8.checkbox('Store full profiles',True,key='v17_store_profiles',help='Keep each realization\'s system time series (float32, memory-capped) to build P90/P50/P10/Mean profiles.')
     st.markdown('**Uncertain parameters**')
     st.caption('Use a network target ID plus a nested path such as `params.pi_m3d_bar`, `params.water_cut`, `pressure_bar`, or an edge `params.max_rate_m3d`. `multiply` treats sampled values as factors; `set` uses absolute values.')
     with st.expander('Network target IDs'):
@@ -39,7 +88,7 @@ def render_uncertainty(st,nodes,edges):
             pars=parse_uncertainty_rows(df.to_dict('records')); cfg=MonteCarloConfig(samples=int(samples),seed=int(seed),method=method,parameters=pars); sc=DevelopmentScenario('Monte Carlo',start,float(years),int(step))
             bar=st.progress(0.0,text='Running realizations...')
             def prog(i,n): bar.progress(i/n,text=f'Running realization {i}/{n}')
-            st.session_state.v17_mc=run_monte_carlo(nodes,edges,sc,cfg,progress=prog); bar.empty()
+            st.session_state.v17_mc=run_monte_carlo(nodes,edges,sc,cfg,progress=prog,workers=int(workers),keep_series=bool(store)); bar.empty()
         except Exception as exc: st.error(f'v19 uncertainty error: {exc}')
     r=st.session_state.get('v17_mc')
     if not r: return
@@ -47,6 +96,10 @@ def render_uncertainty(st,nodes,edges):
     metrics=[]
     for name,s in r.get('metrics',{}).items(): metrics.append({'Metric':name,**s})
     if metrics: st.dataframe(pd.DataFrame(metrics),hide_index=True,use_container_width=True)
+    cp=r.get('compute')
+    if cp:
+        st.caption(f"Compute: {cp.get('workers_used',1)} worker(s) [{cp.get('start_method')}], {cp.get('elapsed_s',0):.1f} s")
+        for note in cp.get('notes',[]): st.warning(note)
     fd=r.get('failure_diagnostics',{})
     if fd.get('survivor_bias_warning'): st.warning('Failed realizations may bias the surviving percentile sample. Review failure diagnostics before using P10/P50/P90.')
     with st.expander('Failure & survivor-bias diagnostics'):
@@ -60,5 +113,6 @@ def render_uncertainty(st,nodes,edges):
     runs=pd.DataFrame(r.get('runs',[])); good=runs[runs.get('success',False)==True] if not runs.empty and 'success' in runs else pd.DataFrame()
     if not good.empty and 'cumulative_oil_m3' in good:
         st.plotly_chart(px.histogram(good,x='cumulative_oil_m3',nbins=min(40,max(10,len(good)//3)),title='Cumulative oil uncertainty distribution'),use_container_width=True)
+    if r.get('profiles'): _render_profiles(st,r)
     with st.expander('Realizations'): st.dataframe(runs,hide_index=True,use_container_width=True)
     d1,d2=st.columns(2); d1.download_button('Download v19 Monte Carlo CSV',export_mc_csv(r),'fieldnet_v19_monte_carlo.csv','text/csv',use_container_width=True); d2.download_button('Download v19 Monte Carlo JSON',export_mc_json(r),'fieldnet_v19_monte_carlo.json','application/json',use_container_width=True)

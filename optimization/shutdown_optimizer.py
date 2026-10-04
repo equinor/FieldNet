@@ -226,10 +226,17 @@ class ShutdownOptimizer:
         self.scenarios_evaluated = 0
         self.feasible_scenarios = []
 
-        best_rate = -1.0
+        best_rate = -1.0  # best FEASIBLE rate only
         best_mask = (1 << n_wells) - 1  # All wells shut in (fallback)
         best_details = None
         best_violations = []
+        # Fallback bookkeeping for the infeasible case is kept separate so an
+        # infeasible scenario's (constraint-violating) rate can never block a
+        # lower-rate feasible one from being selected.
+        fallback_set = False
+        fallback_mask = best_mask
+        fallback_details = None
+        fallback_violations = []
 
         for mask in range(2 ** n_wells):
             details, valid, violations = self._solve_scenario(mask)
@@ -247,20 +254,24 @@ class ShutdownOptimizer:
                     best_mask = mask
                     best_details = details
                     best_violations = []
-            else:
-                # Track best infeasible (for fallback messaging)
-                if best_rate < 0:
-                    rate = self._total_oil_rate(details)
-                    best_rate = rate
-                    best_mask = mask
-                    best_details = details
-                    best_violations = violations
+            elif not fallback_set:
+                # Remember first infeasible scenario (for fallback messaging)
+                fallback_set = True
+                fallback_mask = mask
+                fallback_details = details
+                fallback_violations = violations
 
             if verbose and (mask + 1) % max(1, 2 ** n_wells // 8) == 0:
                 print(f"  ...{mask + 1} / {2**n_wells} scenarios evaluated")
 
         if verbose:
             print(f"[SO] {len(self.feasible_scenarios)} feasible scenarios found")
+
+        if not self.feasible_scenarios and fallback_set:
+            best_rate = self._total_oil_rate(fallback_details)
+            best_mask = fallback_mask
+            best_details = fallback_details
+            best_violations = fallback_violations
 
         # Extract optimal state
         shut_in_wells = []

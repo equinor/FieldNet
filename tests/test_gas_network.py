@@ -43,8 +43,9 @@ class TestGasNetworkBasics:
         """Test gas density using real gas law."""
         solver = GasNetworkSolver({}, {})
 
-        # At 20 bar and 15°C with z=0.9
-        # ρ = (P*M) / (z*R*T) ≈ (20e5 * 17.5) / (0.9 * 8.314 * 288.15) ≈ 16.2 kg/m³
+        # At 20 bar and 15°C with default z = 0.85 + 1e-4*20 = 0.852, M = 17.5 kg/kmol
+        # ρ = P*M / (z*R*T) = 20e5*0.0175 / (0.852*8.314*288.15) ≈ 17.1 kg/m³
+        # (source previously omitted the kg/kmol -> kg/mol conversion, giving ~17,000)
         rho = solver._gas_density(20.0)
         assert 14.0 < rho < 18.0
 
@@ -140,10 +141,12 @@ class TestCompressorAffinity:
         )
 
         # At rated speed
-        h_rated = solver._compressor_head_bar(1000.0, 20.0, 7000.0, comp)
+        # _compressor_head_bar returns (head_bar, status) -- unpack it
+        h_rated, st_rated = solver._compressor_head_bar(1000.0, 20.0, 7000.0, comp)
 
         # At half speed
-        h_half = solver._compressor_head_bar(1000.0, 20.0, 3500.0, comp)
+        h_half, st_half = solver._compressor_head_bar(1000.0, 20.0, 3500.0, comp)
+        assert st_rated == 'OK' and st_half == 'OK'
 
         # Head should decrease when speed decreases (H ∝ N²)
         assert h_rated > 0
@@ -362,10 +365,12 @@ class TestEdgeCases:
         )
 
         # Very low flow (below surge)
-        h_stall = solver._compressor_head_bar(100.0, 20.0, 7000.0, comp)
+        # Function returns (head_bar, status); the tuple must be unpacked.
+        h_stall, status = solver._compressor_head_bar(100.0, 20.0, 7000.0, comp)
 
-        # Should be zero (stalled)
+        # Should be zero head and flagged as SURGE (stalled)
         assert h_stall == 0.0
+        assert status == 'SURGE'
 
     def test_negative_pressures_clamped(self):
         """Test that pressures are clamped to non-negative."""

@@ -39,14 +39,35 @@ def well_settings(prm: dict) -> dict:
     except (TypeError, ValueError): max_rate=math.inf
     if not math.isfinite(max_rate): max_rate=math.inf
     enforce=str(p.get('rate_limit_mode','enforce')).lower()!='report'
+    # Per-phase well limits -> equivalent liquid-rate cap at the current water cut / GOR (tank updates change wc/gor, so the
+    # liquid cap follows the phase mix). Same treatment as the liquid limit incl. rate_limit_mode='report'.
+    wc_=min(max(_f(p,'water_cut',0.2),0.0),0.9999); gor_=max(_f(p,'gor_sm3sm3',100.0),0.0)
+    for key,frac in (('max_oil_rate_m3d',1.0-wc_),('max_water_rate_m3d',wc_),('max_gas_rate_sm3d',(1.0-wc_)*gor_)):
+        v=p.get(key)
+        if v is None: continue
+        try: v=float(v)
+        except (TypeError, ValueError): continue
+        if frac>1e-9 and math.isfinite(v) and v>=0: max_rate=min(max_rate,v/frac)
     if not enforce: max_rate=math.inf
     # Temporary cap written by the capacity-constraint enforcer (never by the user).
     net_cap=p.get('_network_cap_m3d')
     if net_cap is not None:
         try: max_rate=min(max_rate,max(float(net_cap),0.0))
         except (TypeError, ValueError): pass
+    # Decline-curve / prediction-source potential (network/prediction_sources.py); same treatment as the network cap.
+    pot_cap=p.get('_potential_cap_m3d')
+    if pot_cap is not None:
+        try: max_rate=min(max_rate,max(float(pot_cap),0.0))
+        except (TypeError, ValueError): pass
     depth=max(_f(p,'depth_m',2000.0),1.0)
+    geometry=None
+    if p.get('trajectory') or p.get('completion'):
+        from physics.trajectory import tubing_segments, well_total_depth
+        try:
+            geometry=tubing_segments(p); depth=max(float(well_total_depth(p)[1]),1.0)
+        except Exception: geometry=None
     return {
+        'geometry':geometry,
         'pr':max(_f(p,'reservoir_pressure_bar',200.0),0.0),
         'ipr_model':_ipr_name(p.get('ipr_model','PI')),
         'gas_c':max(_f(p,'gas_c_sm3d_bar2n',50.0),0.0), 'gas_n':min(max(_f(p,'gas_n',1.0),0.5),1.0),
@@ -126,7 +147,7 @@ def vlp_bhp(q, whp, s):
     """Bottom-hole pressure required to produce q at wellhead pressure whp, including lift."""
     bhp,props=tubing_bhp_bar(max(q,0.0),whp,s['depth'],s['tubing_id'],s['roughness'],s['temperature'],s['water_cut'],s['gor'],s['api'],s['gas_sg'],
                              s['correlation'],segments=s['segments'],extra_gas_sm3d=s['gas_lift_sm3d'],gas_injection_depth_m=s['gas_lift_depth'],
-                             bottomhole_temperature_c=s['bh_temperature'])
+                             bottomhole_temperature_c=s['bh_temperature'],geometry=s.get('geometry'))
     assist=s['lift_assist_bar']+esp_head_bar_simple(q,s['esp'])
     return bhp-assist, props
 

@@ -2,6 +2,35 @@
 
 Version history and major releases. See [AUDIT_V30.md](AUDIT_V30.md) for detailed v30 findings.
 
+## v32 — Inline equipment, constraint registry, tank communication, compute layer
+
+**Release Date:** 2026-10-04
+
+### Added
+- **Inline equipment** (`network/equipment.py`): choke, control valve, pump and compressor are now *nodes* placed on a line (expanded to `E::in`/`E::out` junctions + `E::link` during solve, collapsed back afterwards). A *joint* node joins flowlines. "Convert to inline equipment node" migrates legacy equipment edges (connector flowlines are 1 m; zero length is rejected by validation).
+- **Feature grouping** (`network/features.py`): palette groups Reservoir / Wells / Connections / Equipment / Processing / Boundaries; well role (producer/injector) + phase; separator types.
+- **Well trajectory and completion diameters** feed tubing VLP (`geometry=`), depth and ID by segment.
+- **Flowline bathymetry profile and riser option** (`solver/equations.flowline_segments`).
+- **Constraint registry** (`solver/constraints.py`): per-feature constraints (per-phase well rates, min BHP, drawdown, WHP, separator per-phase capacity, flowline rate/velocity/erosional ratio/MAOP/dP, equipment power). One implementation shared by solve, forecast and development; `ENFORCEABLE` constraints are honoured by pro-rata choking of contributing wells.
+- **Tank-to-tank communication** (transmissibility x dp, max transfer, 90 % equalisation cap) drawn as links between tanks; simplified coupling tab.
+- **Compute layer** (`network/solve_options.py`, `network/parallel_solve.py`): honour-constraints option, optimiser objective, Eclipse-style guide rates, component-parallel solve, parallel scenario / well-count runs.
+- **Element results tab**: per-element profile (pressure, velocity, holdup...) and time series.
+- **SVG export** of the network.
+- More tubing/flowline correlations: Hagedorn-Brown, Gray, Drift-flux, Hasan-Kabir (see `docs_correlations.md`; not validated against published data).
+- Whole-app smoke harness (`tests/support/app_harness.py`) and Chromium canvas tests (`tests/browser/run_editor_v32_test.py`).
+
+### Fixed
+- Changing a flowline type was ignored (graph hash/canonicalisation); moving nodes no longer invalidates a solve.
+- 14 pre-existing failing tests (earlier "all passing" statements were wrong).
+- App crash: `solver_input` not imported in the Element-results tab (found by the smoke harness).
+
+### Known limitations
+- Streamlit / plotly could not be installed in the build environment; the UI was exercised against a fake Streamlit and in Chromium for the canvas only, never in a live Streamlit session.
+- Relative permeability is a screening average-saturation model.
+- Parallelism only helps for independent systems and MC / scenario / well-count runs; one connected network solves serially.
+- Gas-network solver and legacy v25 coupling are unchanged.
+- Mukherjee-Brill, Duns-Ros, Orkiszewski not implemented.
+
 ## v31 — Reservoir Tanks, Production Prognosis & App Reorganization
 
 **Release Date:** 2026-09-30

@@ -5,6 +5,7 @@ import plotly.express as px
 from network.development_v26 import DevelopmentTask, DevelopmentPlan, compile_plan, run_development_plan
 from network.field_development import _coerce_value
 from ui.widgets import clean_num, clean_text
+from ui.schedule_builder import EVENT_CATALOG
 
 TASK_TYPES=['drill_well','workover','tieback','commission','first_production','facility_expansion','compression_start','shutdown','abandon']
 
@@ -30,8 +31,10 @@ def render_development_v26(st,nodes,edges):
     c1,c2,c3=st.columns(3); start=c1.date_input('Plan start',key='v26_start').isoformat(); years=c2.number_input('Horizon [years]',0.1,50.0,5.0,0.5,key='v26_years'); step=c3.selectbox('Forecast timestep [days]',[7,14,30,60,90],2,key='v26_step')
     ids=pd.DataFrame([{'id':x.get('id'),'name':x.get('name',x.get('id')),'type':x.get('kind')} for x in [*nodes,*edges]])
     with st.expander('Valid target IDs'): st.dataframe(ids,hide_index=True,use_container_width=True)
+    tids=[str(x.get('id')) for x in [*nodes,*edges] if x.get('id') is not None]
+    tfields=list(dict.fromkeys(t.field for t in EVENT_CATALOG if t.field))
     default=pd.DataFrame(columns=['id','name','task_type','target_id','earliest_start','duration_days','predecessors','resource','field','value','description'])
-    df=st.data_editor(default,num_rows='dynamic',use_container_width=True,key='v26_tasks',column_config={'task_type':st.column_config.SelectboxColumn(options=TASK_TYPES)})
+    df=st.data_editor(default,num_rows='dynamic',use_container_width=True,key='v26_tasks',column_config={'task_type':st.column_config.SelectboxColumn(options=TASK_TYPES),'target_id':st.column_config.SelectboxColumn(options=tids,help='Pick a network element (see the table above for names)'),'field':st.column_config.SelectboxColumn(options=tfields,help='Optional property to set when the task finishes; leave blank for the default for the task type')})
     b1,b2=st.columns(2)
     try: plan=DevelopmentPlan('Development Plan',start,float(years),int(step),[t if t.earliest_start else DevelopmentTask(t.id,t.name,t.task_type,t.target_id,start,t.duration_days,t.predecessors,t.resource,t.field,t.value,t.description) for t in _tasks(df.to_dict('records'))])
     except Exception as exc: st.error(str(exc)); plan=None

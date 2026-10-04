@@ -84,22 +84,51 @@ def _pipe_segments(e):
     return int(min(8,max(1,math.ceil(L/1500.0))))
 
 
+def flowline_segments(e):
+    """Marching segments ``[(length_m, dz_m)]`` source -> target.
+
+    With a bathymetry profile or a riser (``params['profile']`` / ``params['riser']``) the geometry from
+    physics/flowline_profile.py is used (true length and local elevation change per segment); otherwise the
+    line is cut uniformly with the straight-line ``elevation_change_m`` (legacy behaviour)."""
+    prm=e.get('params',{}) or {}
+    if prm.get('profile') or (prm.get('riser') or {}).get('enabled'):
+        try:
+            from physics.flowline_profile import profile_points, profile_segments
+            segs=profile_segments(profile_points(e),max_segments=int(fnum(prm,'segments',24)) if prm.get('segments') else 24)
+            if segs: return [(float(g['length_m']),float(g['dz_m'])) for g in segs]
+        except Exception: pass
+    L=max(fnum(e,'length_m',1000.0),0.0); dz=fnum(e,'elevation_change_m',0.0); n=_pipe_segments(e)
+    return [(L/n,dz/n)]*n
+
+
+def _flowline_fn(prm):
+    name=str(prm.get('correlation','Beggs-Brill'))
+    if name.lower().startswith('beggs'): return beggs_brill_dp_bar
+    if name.lower().startswith('homog'): return homogeneous_dp_bar
+    try:
+        from physics.correlations import get_correlation
+        return get_correlation(name)
+    except Exception: return homogeneous_dp_bar
+
+
 def pipeline_dp_bar(e, q, ps, pt, fluid='production'):
     """Signed pressure drop Ps-Pt [bar] for a pipeline, marched along the line from the
     upstream end (source for q>=0, target for reverse flow)."""
     prm=e.get('params',{}) or {}
-    L=max(fnum(e,'length_m',1000.0),0.0); D=fnum(e,'diameter_m',.154); eps=fnum(e,'roughness_m',4.5e-5); dz=fnum(e,'elevation_change_m',0.0)
-    if L<=0: return 0.0
+    D=fnum(e,'diameter_m',.154); eps=fnum(e,'roughness_m',4.5e-5)
+    segs=flowline_segments(e)
+    if sum(g[0] for g in segs)<=0: return 0.0
     wc=1.0 if fluid=='water' else fnum(prm,'water_cut',.2); gor=0.0 if fluid=='water' else fnum(prm,'gor_sm3sm3',100.0)
-    fn=beggs_brill_dp_bar if str(prm.get('correlation','Beggs-Brill')).lower().startswith('beggs') else homogeneous_dp_bar
+    fn=_flowline_fn(prm)
     T=fnum(prm,'temperature_c',50.0); api=fnum(prm,'api',35.0); sg=fnum(prm,'gas_sg',.75)
-    n=_pipe_segments(e); dl=L/n; dzs=dz/n
     p=float(ps) if q>=0 else float(pt); total=0.0
-    for _ in range(n):
-        d1,_=fn(q,dl,D,eps,dzs,max(p,1.0),T,wc,gor,api,sg)
+    order=segs if q>=0 else list(reversed(segs))   # reverse flow marches from the target end
+    for dl,dzs in order:
+        if q<0: dzs=-dzs
+        d1,_=fn(q,dl,D,eps,dzs if q>=0 else -dzs,max(p,1.0),T,wc,gor,api,sg)
         step=-d1 if q>=0 else d1  # pressure change moving with the flow
         pm=max(p+0.5*step,1.0)
-        d,_=fn(q,dl,D,eps,dzs,pm,T,wc,gor,api,sg)
+        d,_=fn(q,dl,D,eps,dzs if q>=0 else -dzs,pm,T,wc,gor,api,sg)
         total+=d; p=p-d if q>=0 else p+d
     return total
 

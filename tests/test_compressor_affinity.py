@@ -81,9 +81,17 @@ class TestCompressorMapBasics:
         eff_1500 = comp_map.get_efficiency(1500.0)
         assert eff_1500 == 0.80
 
-        # At intermediate point
+        # TEST FIX: 1200 Sm3/d is itself a design point of the axial map
+        # (efficiencies 0.72, 0.78, 0.82, 0.80, ... at 600, 900, 1200, 1500), and it
+        # is the best-efficiency point, so linear interpolation returns exactly 0.82;
+        # the old strict "< 0.82" bound could never hold. Check the design point
+        # exactly, then check a genuinely intermediate flow (1350, midway between
+        # 0.82 and 0.80 -> 0.81), which must lie strictly between its neighbours.
         eff_1200 = comp_map.get_efficiency(1200.0)
-        assert 0.80 < eff_1200 < 0.82
+        assert abs(eff_1200 - 0.82) < 1e-9
+        eff_1350 = comp_map.get_efficiency(1350.0)
+        assert 0.80 < eff_1350 < 0.82
+        assert abs(eff_1350 - 0.81) < 1e-9
 
         # Outside range
         eff_out = comp_map.get_efficiency(3000.0)

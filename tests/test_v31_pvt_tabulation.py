@@ -252,8 +252,10 @@ class TestTankMaterialBalance:
         overrides = simple_tank.well_overrides()
         gor = overrides['gor_sm3sm3']
 
-        # At low pressure, GOR should be less than Rsb (40 vs 100)
-        assert gor < 100
+        # Below Pb the *solution* GOR (Rs) falls, but the *producing* GOR delivered to the wells
+        # must not drop under the initial GOR (free gas is produced in addition to dissolved gas).
+        assert gor >= 100 - 1e-9
+        assert simple_tank.pvt.get_gor(simple_tank.p) < 100  # the table's Rs itself does fall
 
 
 class TestPVTSummary:

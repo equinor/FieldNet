@@ -243,8 +243,9 @@ class GasNetworkSolver:
         t_k = self.temperature_c + 273.15  # Convert to Kelvin
         z = self._get_z_factor(p_bar)
 
-        # ρ = (P * M) / (z * R * T)
-        rho = (p_pa * self.M) / (z * self.R * t_k)
+        # ρ = (P * M) / (z * R * T); M is in kg/kmol but R is in J/(mol·K),
+        # so convert M to kg/mol (÷1000) to get ρ in kg/m³.
+        rho = (p_pa * self.M / 1000.0) / (z * self.R * t_k)
         return rho
 
     def _friction_factor_colebrook(self, re: float, epsilon_d: float) -> float:
@@ -624,6 +625,12 @@ class GasNetworkSolver:
                     rated_head_bar=params.get('rated_head_bar', 50.0),
                     rated_speed_rpm=params.get('rated_speed_rpm', 7000.0),
                 )
+
+        # Install the converted network so solve_isothermal() sees it
+        # (previously the solver kept its constructor-time, possibly empty, network).
+        self.nodes = nodes
+        self.edges = edges
+        self.compressors = compressors
 
         # Solve
         pressures, flows, info = self.solve_isothermal(**kwargs)

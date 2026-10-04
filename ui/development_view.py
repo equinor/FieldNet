@@ -4,9 +4,23 @@ import pandas as pd
 from network.development_v26 import DevelopmentTask, DevelopmentPlan, compile_plan, run_development_plan
 from network.forecast import run_forecast
 from network.prognosis import forecast_kpis, run_scenarios, well_count_study
+
+
+def _step_solver(st):
+    """Optimiser step solver from the shared compute settings (None = plain / pro-rata solve)."""
+    try:
+        from network.solve_options import make_step_solver
+        return make_step_solver(st.session_state.get('compute'))
+    except Exception: return None
+
+
+def _workers(st):
+    try: return max(1, int((st.session_state.get('compute') or {}).get('workers', 1)))
+    except (TypeError, ValueError): return 1
 from ui import charts
 from ui.forecast_view import kpi_row, profile_charts, fmt, DEFAULT_START
 from ui.widgets import clean_num, clean_text
+from ui.schedule_builder import render_event_builder, events_to_forecast
 
 WELL_KINDS = ('well', 'water_injector', 'gas_injector')
 
@@ -44,6 +58,9 @@ def render_schedule(st, nodes, edges):
                             column_config={'Include': st.column_config.CheckboxColumn(help='Untick to leave the well out of the plan (never drilled)'),
                                            'Order': st.column_config.NumberColumn(min_value=1, step=1, help='Drilling sequence'),
                                            'Drill + complete [days]': st.column_config.NumberColumn(min_value=0, step=5)})
+        with st.expander('Operational events (optional): shut-ins, rate limits, debottlenecking ...'):
+            st.caption('Added on top of the drilling plan; shared with the Production forecast and Scenarios tabs.')
+            sched_events = render_event_builder(st, nodes, edges, None, st.session_state.get('unit_profile', 'norwegian_si'), key_prefix='evb_sch', start_date=start)
         e, f = st.columns(2)
         compare = e.toggle('Compare with all wells on stream at start', value=True, key='sch_cmp')
         caps = f.toggle('Honour facility capacities', value=True, key='sch_caps')
@@ -58,11 +75,13 @@ def render_schedule(st, nodes, edges):
                 tasks.append(DevelopmentTask(f"T{i+1}", f"Drill {r['Well']}", 'drill_well', str(r['ID']), nb, int(clean_num(r.get('Drill + complete [days]'), 60)), (), f"RIG-{(i % int(rigs)) + 1}"))
             excluded = [r for r in df.to_dict('records') if not bool(r.get('Include'))]
             ns = [dict(n, params={**(n.get('params') or {}), 'available': False}) if any(n['id'] == r['ID'] for r in excluded) else n for n in nodes]
+            user_events = events_to_forecast(sched_events)
             with st.spinner('Scheduling and forecasting...'):
+                # forecast args: nodes, edges, start, years, step, events, depletion
                 res = run_development_plan(ns, edges, DevelopmentPlan('Development plan', start, float(years), int(step), tasks),
-                                           forecast_runner=lambda *a: run_forecast(*a, enforce_constraints=bool(caps)))
+                                           forecast_runner=lambda nn, ee, d0, yr, st_, evs, dep, *a: run_forecast(nn, ee, d0, yr, st_, [*(evs or []), *user_events], dep, *a, enforce_constraints=bool(caps), step_solver=_step_solver(st)))
                 st.session_state.sched_result = res
-                st.session_state.sched_base = run_forecast(ns, edges, start, float(years), int(step), None, None, enforce_constraints=bool(caps)) if compare else None
+                st.session_state.sched_base = run_forecast(ns, edges, start, float(years), int(step), user_events or None, None, enforce_constraints=bool(caps), step_solver=_step_solver(st)) if compare else None
         except Exception as exc:
             st.error(f'Development plan failed: {exc}')
     res = st.session_state.get('sched_result')
@@ -122,6 +141,9 @@ def render_scenarios(st, nodes, edges):
         years = b.number_input('Horizon [years]', 1.0, 50.0, 15.0, 1.0, key='scn_years')
         step = c.selectbox('Report step [days]', [60, 90, 180, 365], index=1, key='scn_step')
         caps = d.toggle('Honour facility capacities', value=True, key='scn_caps')
+        with st.expander('Schedule events applied to every scenario (optional)'):
+            st.caption('Shut-ins, rate limits, pressure changes ... on top of each scenario edit. Shared with the Production forecast and Development schedule tabs.')
+            scn_events = events_to_forecast(render_event_builder(st, nodes, edges, None, st.session_state.get('unit_profile', 'norwegian_si'), key_prefix='evb_scn', start_date=start))
         sdf = st.data_editor(DEFAULT_SCENARIOS, num_rows='dynamic', hide_index=True, use_container_width=True, key='scn_table',
                              column_config={'Wells': st.column_config.TextColumn(help="'all' or a comma-separated list of producer IDs/names"),
                                             'Separator pressure [bar]': st.column_config.NumberColumn(help='Blank = as in the model'),
@@ -135,10 +157,11 @@ def render_scenarios(st, nodes, edges):
             if not name: continue
             scs.append({'name': name, 'wells': clean_text(r.get('Wells'), 'all') or 'all', 'in_place_mult': clean_num(r.get('In-place ×')),
                         'pi_mult': clean_num(r.get('PI ×')), 'separator_pressure_bar': clean_num(r.get('Separator pressure [bar]')),
-                        'liquid_capacity_m3d': clean_num(r.get('Liquid capacity [Sm3/d]')), 'injection': bool(r.get('Injection')) if r.get('Injection') is not None else True})
+                        'liquid_capacity_m3d': clean_num(r.get('Liquid capacity [Sm3/d]')), 'injection': bool(r.get('Injection')) if r.get('Injection') is not None else True,
+                        'events': scn_events or None})
         bar = st.progress(0.0, text='Running scenarios...')
         try:
-            st.session_state.scn_results = run_scenarios(nodes, edges, scs, start, float(years), int(step), bool(caps), progress=lambda i, n: bar.progress(i / n, text=f'Scenario {i}/{n}'))
+            st.session_state.scn_results = run_scenarios(nodes, edges, scs, start, float(years), int(step), bool(caps), step_solver=_step_solver(st), workers=_workers(st), progress=lambda i, n: bar.progress(i / n, text=f'Scenario {i}/{n}'))
         except Exception as exc: st.error(f'Scenario run failed: {exc}')
         bar.empty()
     res = st.session_state.get('scn_results')
@@ -168,7 +191,7 @@ def render_scenarios(st, nodes, edges):
     if run_wc:
         bar = st.progress(0.0, text='Running well-count cases...')
         try:
-            st.session_state.wc_result = well_count_study(nodes, edges, order, start, float(years), int(step), bool(caps), thr / 100.0,
+            st.session_state.wc_result = well_count_study(nodes, edges, order, start, float(years), int(step), bool(caps), thr / 100.0, step_solver=_step_solver(st), workers=_workers(st),
                                                           progress=lambda i, n: bar.progress(i / n, text=f'{i}/{n} wells'))
             st.session_state.wc_names = names
         except Exception as exc: st.error(f'Well-count study failed: {exc}')

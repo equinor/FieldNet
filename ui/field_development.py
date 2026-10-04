@@ -10,6 +10,7 @@ import plotly.express as px
 
 from network.field_development import DevelopmentEvent, DevelopmentScenario, run_development_scenarios
 from ui.widgets import clean_text
+from ui.schedule_builder import render_event_builder
 
 EVENT_COLUMNS = ["date", "target_id", "field", "value", "description"]
 
@@ -77,12 +78,8 @@ def render_field_development(st, nodes: list[dict], edges: list[dict]) -> None:
     names = [x.strip() for x in names_text.split(",") if x.strip()] or ["Base"]
 
     st.markdown("**Development schedule**")
-    st.caption("Examples: `params.available=False` for an outage; `pressure_bar=30` for a boundary change; `params.max_rate_m3d=4000` for a capacity expansion. Target IDs are shown below.")
-    ids = pd.DataFrame([{"ID": n.get("id"), "Name": n.get("name"), "Type": n.get("kind")} for n in nodes] + [{"ID": e.get("id"), "Name": e.get("id"), "Type": e.get("kind")} for e in edges])
-    with st.expander("Network target IDs"):
-        st.dataframe(ids, hide_index=True, use_container_width=True)
-    default_events = pd.DataFrame(columns=EVENT_COLUMNS)
-    event_df = st.data_editor(default_events, num_rows="dynamic", use_container_width=True, key="v16_events")
+    st.caption("Pick an event type, the network element and a date. Values are entered in your unit profile; the same schedule is shared with the forecast and development tabs.")
+    sched_events = render_event_builder(st, nodes, edges, None, st.session_state.get("unit_profile", "norwegian_si"), key_prefix="evb_v16", start_date=start)
 
     st.markdown("**Scenario depletion multipliers**")
     st.caption("Multiplier is applied to each well's configured pressure-decline coefficient. Values below are planning assumptions, not probabilities.")
@@ -93,10 +90,7 @@ def render_field_development(st, nodes: list[dict], edges: list[dict]) -> None:
         multipliers[name] = cols[i % len(cols)].number_input(f"{name} decline multiplier", 0.0, 10.0, float(default), 0.05, key=f"v16_mult_{i}")
 
     if st.button("▶ Run v16 development scenarios", type="primary", use_container_width=True):
-        try:
-            events = parse_event_rows(event_df.to_dict("records"))
-        except ValueError as exc:
-            st.error(str(exc)); events = None
+        events = list(sched_events)
         scenarios = []
         for name in names:
             dep = {}

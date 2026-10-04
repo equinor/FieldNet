@@ -71,6 +71,16 @@ def _initial_pressures(nodes, links, byid):
 
 
 def solve_network(nodes, edges, *, x_scale="jac", max_nfev=3000, initial_guess=None, reseed_attempts=2):
+    """Solve the steady-state network. Inline equipment nodes (choke/valve/pump/compressor) are expanded into
+    inlet/outlet junctions + an internal link and folded back afterwards (network/equipment.py)."""
+    from network.equipment import has_inline, expand_inline_equipment, expand_guess, collapse_results
+    if has_inline(nodes):
+        ns, es, mp = expand_inline_equipment(nodes, edges)
+        return collapse_results(solve_network(ns, es, x_scale=x_scale, max_nfev=max_nfev, initial_guess=expand_guess(initial_guess, mp), reseed_attempts=reseed_attempts), mp)
+    return _solve_network_core(nodes, edges, x_scale=x_scale, max_nfev=max_nfev, initial_guess=initial_guess, reseed_attempts=reseed_attempts)
+
+
+def _solve_network_core(nodes, edges, *, x_scale="jac", max_nfev=3000, initial_guess=None, reseed_attempts=2):
     from network.reservoir_mb import ensure_tank_links
     nodes=ensure_tank_links(nodes)
     # Unconnected components have no equations that can determine them; leave them out.
@@ -250,5 +260,5 @@ def solve_network(nodes, edges, *, x_scale="jac", max_nfev=3000, initial_guess=N
           'variable_scaling':str(x_scale),'n_unknowns':int(nvar),'well_warnings':shut_notes+well_warnings,'injectors':injector_rows,
           'well_rates':{nid:(float(x[i]) if (float(x[i])>=1e-9 and wset[nid]['open']) else 0.0) for nid,i in widx.items()},'injector_rates':{nid:max(float(x[i]),0.0) for nid,i in iidx.items()},
           'edge_fluids':fluids}
-    info['constraints']=evaluate_constraints(nodes,links,pressures,flows,details); info['violations']=sum(r['Status']=='VIOLATED' for r in info['constraints'])
+    info['constraints']=evaluate_constraints(nodes,links,pressures,flows,details,info); info['violations']=sum(r['Status']=='VIOLATED' for r in info['constraints'])
     return pressures,flows,info,details

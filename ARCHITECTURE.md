@@ -590,3 +590,9 @@ Next solve (e.g., forecast step) uses these as initial guess. ~7× speedup.
 ---
 
 See [API_REFERENCE.md](API_REFERENCE.md) for solver and tank equations, and [EXAMPLES.md](EXAMPLES.md) for use cases.
+
+## v32 additions
+- `network/equipment.py` inline equipment expansion/collapse around the steady-state kernel.
+- `solver/constraints.py` registry shared by solve / forecast / development; `solver/v21.py` enforces `ENFORCEABLE` ones.
+- `network/solve_options.py` + `network/parallel_solve.py` compute layer (honour constraints, optimiser, parallel components).
+- `network/element_results.py` per-element profiles; `ui/properties.py`, `ui/element_view.py`, `ui/compute_panel.py`, `ui/tank_coupling.py` UI helpers; `ui/svg_export.py`.
