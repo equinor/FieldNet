@@ -48,3 +48,47 @@ def apply_communication_table(nodes, df):
             if abs(float(c.get('transmissibility_m3d_bar') or 0) - T) > 1e-12 or c.get('max_transfer_m3d') != M:
                 c['transmissibility_m3d_bar'] = max(T, 0.0); c['max_transfer_m3d'] = M; changed = True
     return changed
+
+
+# ----------------------------------------------------------------------------- create / delete links, equalisation time
+def link_exists(nodes, a, b):
+    byid = {n['id']: n for n in nodes}
+    for x, y in ((a, b), (b, a)):
+        if any(c.get('to') == y for c in ((byid.get(x) or {}).get('params') or {}).get('communication') or []): return True
+    return False
+
+
+def add_link(nodes, a, b, transmissibility_m3d_bar=100.0, max_transfer_m3d=None):
+    """Tank a <-> tank b communication (stored once, on tank a; flow goes from the higher to the lower pressure). Raises ValueError on invalid input."""
+    byid = {n['id']: n for n in nodes}
+    if a == b: raise ValueError('a tank cannot communicate with itself')
+    if a not in byid or b not in byid or byid[a].get('kind') != 'reservoir' or byid[b].get('kind') != 'reservoir': raise ValueError('both ends must be reservoir tanks')
+    if link_exists(nodes, a, b): raise ValueError('these tanks are already linked - edit the existing link')
+    T = float(transmissibility_m3d_bar)
+    if not T >= 0: raise ValueError('transmissibility must be >= 0')
+    byid[a].setdefault('params', {}).setdefault('communication', []).append({'to': b, 'transmissibility_m3d_bar': T, 'max_transfer_m3d': (float(max_transfer_m3d) if max_transfer_m3d else None)}); return True
+
+
+def remove_link(nodes, a, b):
+    """Remove the link between a and b (either direction). Returns True when something was removed."""
+    byid = {n['id']: n for n in nodes}; removed = False
+    for x, y in ((a, b), (b, a)):
+        p = (byid.get(x) or {}).get('params') or {}; com = p.get('communication') or []; keep = [c for c in com if c.get('to') != y]
+        if len(keep) != len(com): removed = True; p['communication'] = keep
+    return removed
+
+
+def link_dynamics(nodes):
+    """Per link: pressure difference, current transfer rate and the time constant of pressure equalisation tau = (C1 C2 / (C1 + C2)) / T [days]
+    (C = compliance [m3/bar] from the tank's pore volume and compressibility), from the tanks' *initial* state."""
+    from network.reservoir_mb import tanks_from_nodes
+    tk = tanks_from_nodes(nodes); byid = {n['id']: n for n in nodes}; rows = []
+    for t in nodes:
+        for c in (t.get('params') or {}).get('communication') or []:
+            o = tk.get(c.get('to')); s = tk.get(t['id'])
+            if not (o and s): continue
+            T = float(c.get('transmissibility_m3d_bar') or 0.0); c1, c2 = s.compliance(), o.compliance(); dp = s.p - o.p
+            tau = (c1 * c2 / (c1 + c2)) / T if T > 0 else float('inf')
+            rows.append({'From': s.name, 'To': o.name, 'Initial dP [bar]': dp, 'Transfer now [m3/d]': T * dp, 'Equalisation time constant [days]': tau,
+                         'Reading': 'effectively one tank (tau < 30 d)' if tau < 30 else ('slow coupling' if tau < 3650 else 'practically isolated')})
+    return pd.DataFrame(rows)

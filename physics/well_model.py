@@ -83,6 +83,7 @@ def well_settings(prm: dict) -> dict:
         'water_cut':min(max(_f(p,'water_cut',0.2),0.0),0.9999),
         'gor':max(_f(p,'gor_sm3sm3',100.0),0.0), 'api':_f(p,'api',35.0), 'gas_sg':_f(p,'gas_sg',0.75),
         'correlation':str(p.get('vlp_model',p.get('correlation','Beggs-Brill')) or 'Beggs-Brill'),
+        'vlp_dp_multiplier':min(max(_f(p,'vlp_dp_multiplier',1.0),0.2),5.0),
         'lift_type':lift,
         'gas_lift_sm3d':max(_f(p,'gas_lift_injection_sm3d',0.0),0.0) if lift=='gas_lift' else 0.0,
         'gas_lift_depth':min(max(_f(p,'gas_lift_depth_m',depth),0.0),depth),
@@ -154,6 +155,8 @@ def vlp_bhp(q, whp, s):
         bhp,props=tubing_bhp_bar(max(q,0.0),whp,s['depth'],s['tubing_id'],s['roughness'],s['temperature'],s['water_cut'],s['gor'],s['api'],s['gas_sg'],
                                  s['correlation'],segments=s['segments'],extra_gas_sm3d=s['gas_lift_sm3d'],gas_injection_depth_m=s['gas_lift_depth'],
                                  bottomhole_temperature_c=s['bh_temperature'],geometry=s.get('geometry'),thermal=s.get('thermal'))
+    m=s.get('vlp_dp_multiplier',1.0)
+    if m!=1.0: bhp=whp+m*(bhp-whp)          # matched tubing pressure-drop multiplier (well-test / flowing-gradient match)
     assist=s['lift_assist_bar']+esp_head_bar_simple(q,s['esp'])
     return bhp-assist, props
 

@@ -102,9 +102,13 @@ def render_forecast(st, nodes, edges):
         st.info(f"{len(wells)-len(linked)} producer(s) are not assigned to a tank and use the per-well decline coefficient: " + ', '.join(w['name'] for w in wells if w not in linked))
     with st.container(border=True):
         a, b, c, d = st.columns(4)
-        start = a.date_input('Start date', value=DEFAULT_START, key='fc_start').isoformat()
-        years = b.number_input('Horizon [years]', 0.5, 50.0, 15.0, 0.5, key='fc_years')
-        step = c.selectbox('Report step [days]', [30, 60, 90, 180, 365], index=2, key='fc_step', help='Tank depletion is sub-stepped automatically; the step sets the reporting interval.')
+        _tp = st.session_state.get('tpl_forecast') or {}
+        try: _d0 = pd.Timestamp(_tp.get('start')).date() if _tp.get('start') else DEFAULT_START
+        except Exception: _d0 = DEFAULT_START
+        _steps = [30, 60, 90, 180, 365]
+        start = a.date_input('Start date', value=_d0, key='fc_start').isoformat()
+        years = b.number_input('Horizon [years]', 0.5, 50.0, float(_tp.get('years', 15.0)), 0.5, key='fc_years')
+        step = c.selectbox('Report step [days]', _steps, index=_steps.index(_tp['step']) if _tp.get('step') in _steps else 2, key='fc_step', help='Tank depletion is sub-stepped automatically; the step sets the reporting interval.')
         caps = d.toggle('Honour facility capacities', value=True, key='fc_caps')
         dep = {}
         unlinked = [w for w in wells if w not in linked]

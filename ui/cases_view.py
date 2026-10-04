@@ -25,7 +25,17 @@ def _fresh_forecast(ss):
     """The session forecast, only if it was computed for the model currently on screen."""
     from ui.graph_contract import graph_hash
     fc = ss.get('forecast')
-    return fc if fc and ss.get('forecast_hash') == graph_hash(ss.nodes, ss.edges) else None
+    if fc and ss.get('forecast_hash') == graph_hash(ss.nodes, ss.edges): return fc
+    cf = ss.get('case_forecast')
+    return cf['fc'] if cf and cf.get('hash') == graph_hash(ss.nodes, ss.edges) else None
+
+
+SESSION_EXTRAS = {'post_scripts': 'pp_src', 'stea_mapping': 'stea_map', 'mb_history': 'mb_history', 'nodal_tests': 'nodal_tests', 'nodal_survey': 'nodal_survey', 'fluid_library': 'fluids'}
+
+
+def current_extras(ss):
+    """User inputs worth keeping with a case (scripts, mappings, measured data, fluid library)."""
+    return {k: ss.get(v) for k, v in SESSION_EXTRAS.items() if ss.get(v)}
 
 
 def load_case_into_editor(st, case, reset):
@@ -33,7 +43,15 @@ def load_case_into_editor(st, case, reset):
     ss = st.session_state
     ss.nodes, ss.edges = copy.deepcopy(case['nodes']), copy.deepcopy(case['edges'])
     if case.get('unit_profile'): ss.unit_profile = case['unit_profile']
+    ex = case.get('extras') or {}
+    for k, v in SESSION_EXTRAS.items():
+        if k in ex: ss[v] = copy.deepcopy(ex[k])
+        else: ss.pop(v, None)
+    for k in ('hub_cache', 'pp_tables', 'nodal_mc', 'nodal_match', 'blowout', 'case_forecast', 'shared_tables', 'export_basket'): ss.pop(k, None)
     reset()
+    if case.get('forecast') and case['forecast'].get('field'):
+        from ui.graph_contract import graph_hash
+        ss['case_forecast'] = {'fc': copy.deepcopy(case['forecast']), 'hash': graph_hash(ss.nodes, ss.edges)}
     for k in ('forecast', 'sched_result', 'scn_results', 'wc_result', 'qa28'): ss.pop(k, None)
     ss.pop('selected', None)
 
@@ -65,7 +83,7 @@ def render_cases(st, *, solved, reset, profile_label=''):
         st.info('No case yet. Save the model you have on screen as your first case.')
         c1, c2 = st.columns([3, 1]); nm = c1.text_input('Case name', 'Base case', key='cs_first_name')
         if c2.button('Create first case', type='primary', key='cs_first', use_container_width=True):
-            lib.add(new_case(nm, ss.nodes, ss.edges, ss.get('unit_profile'), results=solved(), forecast=_fresh_forecast(ss))); st.rerun()
+            lib.add(new_case(nm, ss.nodes, ss.edges, ss.get('unit_profile'), results=solved(), forecast=_fresh_forecast(ss), extras=current_extras(ss))); st.rerun()
         _share_import_only(st, lib)
         return
     act = lib.cases[lib.active]
@@ -88,11 +106,11 @@ def _library_tab(st, lib, solved, reset, dirty):
     if a.button('💾 Save model on screen into this case', key='cs_save', type='primary' if (dirty and sel == lib.active) else 'secondary', use_container_width=True,
                 help='Overwrites the case with the model currently in the editor (and the current solve / forecast, if any).'):
         r = solved(); fc = _fresh_forecast(ss)
-        lib.save(sel, ss.nodes, ss.edges, ss.get('unit_profile'), results=r, forecast=fc); lib.active = sel; st.success(f"Saved to '{c['name']}'."); st.rerun()
+        lib.save(sel, ss.nodes, ss.edges, ss.get('unit_profile'), results=r, forecast=fc, extras=current_extras(ss)); lib.active = sel; st.success(f"Saved to '{c['name']}'."); st.rerun()
     if b.button('📂 Load this case into the editor', key='cs_load', use_container_width=True, help='Replaces the model on screen. Save first if you have unsaved changes.'):
         load_case_into_editor(st, c, reset); lib.active = sel; st.success(f"Loaded '{c['name']}'. Solve to see its results."); st.rerun()
     if d.button('➕ Save model on screen as a new case', key='cs_saveas', use_container_width=True):
-        lib.add(new_case(f"{c['name']} (edited)" if dirty else 'New case', ss.nodes, ss.edges, ss.get('unit_profile'), parent_id=sel, results=solved(), forecast=_fresh_forecast(ss))); st.rerun()
+        lib.add(new_case(f"{c['name']} (edited)" if dirty else 'New case', ss.nodes, ss.edges, ss.get('unit_profile'), parent_id=sel, results=solved(), forecast=_fresh_forecast(ss), extras=current_extras(ss))); st.rerun()
     if dirty and sel == lib.active: st.caption('The editor differs from the saved case — use Save, or Save as a new case to keep both.')
     with st.expander('Duplicate / copy between cases', expanded=True):
         x1, x2 = st.columns([3, 1]); nm = x1.text_input('Name of the copy', f"{c['name']} - copy", key=f'cs_dup_name_{sel}')

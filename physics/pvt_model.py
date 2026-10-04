@@ -237,7 +237,7 @@ def gas_viscosity_cp(p_bar, t_c, z, gas_sg, co2=0.0, h2s=0.0, n2=0.0):
     rho_gcc = (p_bar * PSI) * m / (10.732 * t_r * z) * 0.01601846   # lb/ft3 -> g/cc
     def lge(rho):
         k = (9.379 + 0.0160 * m) * t_r ** 1.5 / (209.2 + 19.26 * m + t_r); x = 3.448 + 986.4 / t_r + 0.01009 * m; y = 2.447 - 0.2224 * x
-        return 1e-4 * k * math.exp(x * rho ** y)
+        return 1e-4 * k * math.exp(min(x * min(max(rho, 0.0), 1.2) ** y, 50.0))   # clamp: solver trial states can be far outside the correlation range
     base = lge(rho_gcc); atm = lge(0.0 + 1e-6 * m)
     lg = math.log10(max(gas_sg, 1e-3))
     corr = n2 * (8.48e-3 * lg + 9.59e-3) + co2 * (9.08e-3 * lg + 6.24e-3) + h2s * (8.49e-3 * lg + 3.73e-3)

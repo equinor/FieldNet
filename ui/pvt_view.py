@@ -52,8 +52,11 @@ def render_pvt(st, nodes, edges, solved):
     st.subheader('Fluid & PVT')
     st.caption('Correlation PVT replaces the fixed screening model (which used Pb = 150 bar and Rsb = 120 Sm³/Sm³ for every fluid). Choose correlations, add CO2 / H2S / N2, '
                'calibrate to lab data, then apply to wells and flowlines. Elements you do not apply it to keep the legacy screening model.')
-    t_fluid, t_cal, t_temp, t_gq = st.tabs(['Fluid & correlations', 'Lab data & calibration', 'Temperature model', 'Gas quality (CO2 / H2S)'])
+    t_fluid, t_lib, t_cal, t_temp, t_gq = st.tabs(['Fluid & correlations', 'Fluid library (several fluids)', 'Lab data & calibration', 'Temperature model', 'Gas quality (CO2 / H2S)'])
     with t_fluid: _fluid_tab(st, nodes, edges)
+    with t_lib:
+        from ui.fluid_library_view import render_fluid_library
+        render_fluid_library(st, nodes, edges, solved, lambda ss, a, g, r: _spec_from_state(ss, a, g, r))
     with t_cal: _cal_tab(st, nodes, edges)
     with t_temp: _temp_tab(st, nodes, edges, solved)
     with t_gq: _gq_tab(st, nodes, edges, solved)

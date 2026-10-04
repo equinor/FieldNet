@@ -197,7 +197,7 @@ def iter_forecast(nodes, edges, start_date, years=5, step_days=30, events=None, 
         row={'Date':date,'Day':t,'Total liquid [m3/d]':tl,'Oil [m3/d]':avg['oil'],'Water [m3/d]':avg['wat'],'Gas [Sm3/d]':avg['gas'],'Water injection [m3/d]':avg['winj'],
              'Water cut [%]':100*avg['wat']/tl if tl>0 else 0.0,'GOR [Sm3/Sm3]':avg['gas']/avg['oil'] if avg['oil']>0 else 0.0,
              'Cumulative liquid [m3]':sum(s['cum_liq'] for s in state.values()),'Cumulative oil [Sm3]':cum['oil'],'Cumulative gas [Sm3]':cum['gas'],'Cumulative water [m3]':cum['wat'],'Cumulative water injection [m3]':cum['winj'],
-             'Wells flowing':int(flowing),'Substeps':nsub,'Violations':first_info.get('violations',0),'Converged':converged,'Message':first_info.get('message','')}
+             'Wells flowing':int(flowing),'Step [days]':dt_days,'Substeps':nsub,'Violations':first_info.get('violations',0),'Converged':converged,'Message':first_info.get('message','')}
         for tk in tanks.values(): row[f"P {tk.name} [bar]"]=tk.p
         rows.append(row)
         yield _event('step','Completed '+date,date,nsub,with_result=True)

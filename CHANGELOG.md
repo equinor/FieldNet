@@ -2,6 +2,50 @@
 
 Version history and major releases. See [AUDIT_V30.md](AUDIT_V30.md) for detailed v30 findings.
 
+## v32.6 — Templates & examples library
+
+**Release Date:** 2026-10-04 - see TEMPLATES_V32_6.md
+
+### New
+- **18 loadable templates** (`network/templates.py`, `ui/templates_view.py`; Cases & Data → Templates & examples): HPHT 4-slot subsea gas template, daisy chain, several communicating tanks with dual-zone wells, oil with gas injection, pure depletion, wellhead platform tied back to a host, subsea booster pump, subsea and topside compressors, horizontal wells, HPHT tight gas with fractured wells, gas lift, ESP, waterflood, gas-condensate tieback, onshore gas gathering, plus two learning examples. Each has a description, what to watch and suggested forecast settings; load into the editor or as a new case.
+- Forecast tab picks up the template's suggested start / horizon / step.
+
+### Fixed
+- Gas viscosity (Lee) overflowed at extreme solver trial pressures with correlation PVT; the exponent is now clamped (`physics/pvt_model.py`).
+
+### Tests
+- `tests/test_templates.py`: structure, solve, short forecasts, equipment benefit, content checks, loader through the harness.
+
+## v32.5 — Data hub, yearly bars, groups, material balance, nodal uncertainty / matching / blowout, several fluids, export
+
+**Release Date:** 2026-10-04 - see DATA_NODAL_V32_5.md
+
+### New
+- **One consistent data layer** (`network/data_hub.py`, `ui/hub_access.py`): every table (model, steady solve, forecast, yearly volumes, groups, KPIs) is derived from the same model / solve / forecast; 12+ cross-checks (field = sum of wells, yearly = cumulative, tank = field, groups reconcile, results belong to the model on screen). Any table on any tab can be sent to the export basket.
+- **Yearly bars** (`network/annual.py`, `ui/annual_view.py`; Prognosis → Yearly profiles): calendar-year volumes for field / wells / tanks / groups, unit systems (MSm3/GSm3, Sm3, mmbbl/bcf), oil-equivalent, stacked, cumulative lines; partial years drawn lighter. The yearly sums equal the cumulatives exactly (forecast rows now carry `Step [days]`).
+- **Groups** (`network/groups.py`, `ui/groups_view.py`; Reservoir & wells → Groups): tank + its wells in one click, `North/Segment A` hierarchy, sums at the steady solve, group profiles (rates, cumulatives, water injection, volume-weighted pressure, RF) and yearly volumes.
+- **Material balance & voidage** (`network/mb_analysis.py`, `ui/mb_view.py`; Tanks & coupling): voidage vs replacement by year + VRR, cumulative voidage, Havlena-Odeh, Campbell, Cole, p/z, drive indices, pressure vs cumulative / RF / net voidage; fits in-place volume and Schilthuis aquifer on **measured history** or checks a forecast.
+- **Transmissibility links**: add / remove tank-tank links (editing existed) and the equalisation time constant per link.
+- **Nodal analysis** (`ui/nodal_tools.py`): what-if sliders on 11 inputs; Monte-Carlo fan of IPR / VLP curves (P90-P10 band, percentile slider, rate distribution, sensitivity); **blowout / worst-case discharge** (`physics/blowout.py`: tubing, annulus, both, skin removed, subsea hydrostatic exit, sonic exit check, release over time); **matching to measured data** (`physics/well_match.py`: IPR fit, VLP correlation ranking + `vlp_dp_multiplier`, flowing-gradient survey, apply to well). Measured points are overlaid on the main nodal chart.
+- **Several fluids** (`network/fluids.py`, `ui/fluid_library_view.py`; Fluid & PVT → Fluid library): named fluids assigned to a tank system / wells / flowlines, tank Boi-Rsi-Pb synced from the fluid PVT, propagate edits, consistency checks, blended fluid where streams meet.
+- **Export** (`network/exporters.py`, `ui/data_view.py`; Cases & Data): Excel (README + one sheet per table), CSV zip, JSON, STEA-style yearly profile table with an editable mapping, and a local read-only API bundle (`serve.py`).
+- **Python post-processing** (`network/postprocess.py`): script reshapes tables before export; AST-checked subset.
+- Cases now also keep the wells / tanks forecast rows, and the user inputs (scripts, STEA mapping, measured data, fluid library); loading a case restores its forecast while the model is unchanged.
+
+### Fixed
+- Forecast field rows lacked the step length; the last (shorter) step was mis-annualised by 1.4 %.
+
+### Limits (stated, not hidden)
+- The STEA import format is not known: the export is template-driven - check the first import.
+- The "API" is a local snapshot server, not a hosted or live service.
+- Material balance on a forecast of the screening tank model closes by construction (consistency check, not evidence); in-place volume is not identifiable when pressure is supported (the tool warns).
+- Blowout is steady-state screening: no transient inflow, bridging, gas-cap coning or relief-well kill; the annulus is an equal-area pipe.
+- The post-processing filter blocks honest mistakes; it is not a security sandbox.
+- Run only in the fake-Streamlit harness here; real Streamlit / Plotly rendering was not exercised.
+
+### Tests
+83 new tests (`tests/test_data_layer.py`, `test_export_postprocess.py`, `test_mb_analysis.py`, `test_nodal_uncertainty.py`, `test_blowout.py`, `test_well_match.py`, `test_fluids.py`, `test_app_v325.py`); full suite 1415 passed.
+
 ## v32.4 — Fluid & PVT, calibration, CO2 / H2S, temperature model
 
 **Release Date:** 2026-10-04

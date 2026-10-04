@@ -10,7 +10,8 @@ from network.scenario_v29 import scenario_diff, _canon
 
 CASE_SCHEMA = 'case-1'
 LIBRARY_SCHEMA = 'case-library-1'
-FORECAST_KEEP = ('field', 'recovery')   # light-weight parts of a forecast kept with a case (no per-element detail)
+FORECAST_KEEP = ('field', 'recovery', 'wells', 'tanks', 'constraints')   # parts of a forecast kept with a case: enough to rebuild yearly bars, groups, material balance and exports after loading
+EXTRAS_KEYS = ('post_scripts', 'stea_mapping', 'mb_history', 'nodal_tests', 'nodal_survey', 'fluid_library')   # user inputs (not results) stored with a case
 
 
 def _now(): return datetime.now(timezone.utc).isoformat(timespec='seconds')
@@ -44,13 +45,14 @@ def forecast_light(fc):
     return _builtin({k: fc[k] for k in FORECAST_KEEP if k in fc})
 
 
-def new_case(name, nodes, edges, unit_profile='norwegian_si', *, description='', parent_id=None, results=None, forecast=None, kpis=None):
+def new_case(name, nodes, edges, unit_profile='norwegian_si', *, description='', parent_id=None, results=None, forecast=None, kpis=None, extras=None):
     from network.prognosis import forecast_kpis
     fl = forecast_light(forecast)
     return {'schema': CASE_SCHEMA, 'id': uuid.uuid4().hex[:10], 'name': (str(name).strip() or 'Case'), 'description': str(description), 'parent_id': parent_id,
             'created_utc': _now(), 'modified_utc': _now(), 'unit_profile': unit_profile,
             'nodes': _builtin(nodes), 'edges': _builtin(edges), 'solve': solve_summary(results) if not isinstance(results, dict) else results,
-            'forecast': fl, 'forecast_kpis': _builtin(forecast_kpis(fl)) if fl and fl.get('field') else None}
+            'forecast': fl, 'forecast_kpis': _builtin(forecast_kpis(fl)) if fl and fl.get('field') else None,
+            'extras': _builtin({k: v for k, v in (extras or {}).items() if k in EXTRAS_KEYS and v})}
 
 
 class CaseLibrary:
@@ -71,10 +73,10 @@ class CaseLibrary:
         self.cases[case['id']] = case
         if make_active: self.active = case['id']
         return case
-    def save(self, cid, nodes, edges, unit_profile, *, results=None, forecast=None, description=None):
+    def save(self, cid, nodes, edges, unit_profile, *, results=None, forecast=None, description=None, extras=None):
         """Overwrite case ``cid`` with the current working model (name/id/created kept)."""
         old = self.cases[cid]; fresh = new_case(old['name'], nodes, edges, unit_profile, description=old['description'] if description is None else description,
-                                                parent_id=old.get('parent_id'), results=results, forecast=forecast)
+                                                parent_id=old.get('parent_id'), results=results, forecast=forecast, extras=extras if extras is not None else old.get('extras'))
         # a save of an unchanged model keeps results computed earlier if none are supplied now
         if results is None and forecast is None and model_hash(fresh) == model_hash(old): fresh['solve'], fresh['forecast'], fresh['forecast_kpis'] = old.get('solve'), old.get('forecast'), old.get('forecast_kpis')
         fresh['id'], fresh['created_utc'] = old['id'], old['created_utc']; self.cases[cid] = fresh; return fresh
@@ -86,7 +88,7 @@ class CaseLibrary:
     def copy_into(self, src_id, dst_id, parts=('model',)):
         """Copy parts of case ``src_id`` into ``dst_id``. parts: model (nodes+edges+units) | results."""
         s, d = self.cases[src_id], self.cases[dst_id]
-        if 'model' in parts: d['nodes'], d['edges'], d['unit_profile'] = copy.deepcopy(s['nodes']), copy.deepcopy(s['edges']), s.get('unit_profile')
+        if 'model' in parts: d['nodes'], d['edges'], d['unit_profile'], d['extras'] = copy.deepcopy(s['nodes']), copy.deepcopy(s['edges']), s.get('unit_profile'), copy.deepcopy(s.get('extras') or {})
         if 'results' in parts: d['solve'], d['forecast'], d['forecast_kpis'] = copy.deepcopy(s.get('solve')), copy.deepcopy(s.get('forecast')), copy.deepcopy(s.get('forecast_kpis'))
         d['modified_utc'] = _now(); return d
     def rename(self, cid, name):

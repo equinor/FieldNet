@@ -610,3 +610,17 @@ See [API_REFERENCE.md](API_REFERENCE.md) for solver and tank equations, and [EXA
 - `physics/thermal.py` - `Stream`, `advance_segment` (energy balance), Ramey profile. `physics/vlp.tubing_bhp_bar(thermal=...)`, `solver.equations.pipeline_march(t_in, profile)`.
 - `network/thermal_network.py` - `thermal_pass`, `with_thermal(solver)` (wraps the Network-tab solver; no-op without thermal elements).
 - `physics/gas_quality.py`, `ui/pvt_view.py`.
+
+
+## v32.5 data layer, material balance, nodal tools
+- `network/annual.py` calendar-year integration of step rates (`annual_volumes`, `field_/wells_/tanks_annual`, `convert`, `bar_figure`). Forecast rows are step starts with `Step [days]`; cumulatives are step ends.
+- `network/groups.py` groups as `params['group']`; all group results derived. `network/data_hub.py` `build_hub` / `check_consistency`; `ui/hub_access.py` `current_hub` (cached by model / forecast / solve signature) and the export basket (`table_actions`).
+- `network/mb_analysis.py` (series from forecast or history -> balance table, fits, straight-line tables, drive indices, voidage). `ui/mb_view.py`.
+- `network/nodal_uncertainty.py` (reuses `network/uncertainty.py` LHS samplers), `physics/blowout.py`, `physics/well_match.py`, `ui/nodal_tools.py`. `physics/well_model.vlp_bhp` honours `vlp_dp_multiplier`.
+- `network/fluids.py` + `ui/fluid_library_view.py`: the library is a view over element params (`fluid_name`), rebuilt from elements when absent.
+- `network/exporters.py`, `network/postprocess.py`, `ui/data_view.py`. Case package: `FORECAST_KEEP` now includes wells / tanks / constraints; `case['extras']` holds user inputs (`EXTRAS_KEYS`).
+
+
+## v32.6 templates
+
+`network/templates.py` holds builders (small helpers: node / pipe / well / tank / pump / compressor, `_finish` auto-layouts) and the `TEMPLATES` registry (name, category, builder, suggested start / years / step, shows, watch). `build(key)` returns a deep copy. `ui/templates_view.py` loads one into `session_state` (clears forecast / hub / case-forecast caches, stores `tpl_forecast` for the forecast tab) or saves it as a new case. Rule for new templates: pump / compressor edges sit between free nodes; verify solve + a short forecast converge before registering.

@@ -73,8 +73,16 @@ from network.reservoir_mb import apply_tank_links, tank_summary, TANK_DEFAULTS
 from network.examples import demo_field_case
 from ui.interchange_v27 import render_interchange_v27
 from ui.scenario_v29 import render_scenario_v29
-from ui.cases_view import render_cases
+from ui.cases_view import render_cases, library
+from ui.templates_view import render_templates
 from ui.pvt_view import render_pvt
+from ui.hub_access import current_hub, table_actions
+from ui.annual_view import render_annual
+from ui.groups_view import render_groups
+from ui.mb_view import render_mb
+from ui.nodal_tools import render_nodal_tools
+from ui.data_view import render_data
+from ui import tank_coupling as _tc
 from solver.model_assurance_v28 import model_quality_report
 from physics.unit_system import (PROFILES, labels as unit_labels, STANDARD_CONDITIONS, pressure_to_display, pressure_from_display, temperature_to_display, temperature_from_display, length_to_display, length_from_display, diameter_to_display, diameter_from_display, liquid_rate_to_display, liquid_rate_from_display, gor_to_display, gor_from_display, pi_to_display, pi_from_display, velocity_to_display, heat_transfer_u_to_display, heat_transfer_u_from_display)
 from ui.uncertainty_v17 import render_uncertainty
@@ -177,11 +185,11 @@ with st.sidebar:
     st.caption('Connect components in the editor: drag from an OUT port onto another component’s IN port.')
     if st.button('Load demo field',use_container_width=True): st.session_state.nodes,st.session_state.edges=demo_field_case(); reset_solve(); [st.session_state.pop(k,None) for k in ('forecast','sched_result','scn_results','wc_result')]; st.rerun()
 
-G=st.tabs(['🗺️ Network','🛢️ Reservoir & wells','📊 Results','📈 Prognosis','🎯 Calibration','🎲 Uncertainty','📁 Cases','🧰 Tools'])
+G=st.tabs(['🗺️ Network','🛢️ Reservoir & wells','📊 Results','📈 Prognosis','🎯 Calibration','🎲 Uncertainty','📁 Cases & Data','🧰 Tools'])
 tab_net=G[0]
-with G[1]: tab_nodal,tab_tanks,tab_sources,tab_pvt=st.tabs(['Nodal analysis','Tanks & coupling','Prediction source','Fluid & PVT'])
+with G[1]: tab_nodal,tab_tanks,tab_groups,tab_sources,tab_pvt=st.tabs(['Nodal analysis','Tanks & coupling','Groups','Prediction source','Fluid & PVT'])
 with G[2]: tab_results,tab_diag,tab_elem=st.tabs(['Summary & constraints','Profiles & flow assurance','Element results'])
-with G[3]: tab_forecast,tab_dev26,tab_development=st.tabs(['Production forecast','Development schedule','Scenarios & well count'])
+with G[3]: tab_forecast,tab_annual,tab_dev26,tab_development=st.tabs(['Production forecast','Yearly profiles','Development schedule','Scenarios & well count'])
 with G[4]: tab_cal=st.container()
 with G[5]: tab_uncertainty,tab_rel=st.tabs(['Monte Carlo','Reliability'])
 with G[7]: tab_ops,tab_qa28,tab_io27=st.tabs(['Engineering tools','Model checks','Import / export & snapshots'])
@@ -446,6 +454,10 @@ with tab_nodal:
         fig.add_scatter(x=X,y=[pressure_to_display(v,PROFILE) for v in curve['VLP']],name=f"Outflow (VLP, {prm['vlp_model']})",mode='lines',line=dict(color=charts.CATEGORICAL[0],width=2))
         if qop>0:
             bop=ipr_pwf(qop,ws); fig.add_scatter(x=[liquid_rate_to_display(qop,PROFILE)],y=[pressure_to_display(bop,PROFILE)],name='Operating point',mode='markers',marker=dict(size=11,color=charts.GAS,line=dict(width=2,color='white')))
+        _mt=pd.DataFrame((st.session_state.get('nodal_tests') or {}).get(wid) or [])
+        if len(_mt) and {'Rate [m3/d]','BHP [bar]'}<=set(_mt.columns):
+            _mt=_mt.dropna(subset=['Rate [m3/d]','BHP [bar]'])
+            if len(_mt): fig.add_scatter(x=[liquid_rate_to_display(v,PROFILE) for v in _mt['Rate [m3/d]']],y=[pressure_to_display(v,PROFILE) for v in _mt['BHP [bar]']],name='Measured well tests',mode='markers',marker=dict(size=10,symbol='diamond',color='#000'))
         st.plotly_chart(charts.style(fig,f"{w['name']} — nodal analysis",f"Bottom-hole pressure [{ul['pressure']}]",f"Liquid rate [{ul['liquid_rate']}]",420),use_container_width=True)
         a,b,c,d=st.columns(4)
         a.metric('Liquid rate',f"{liquid_rate_to_display(qop,PROFILE):,.1f} {ul['liquid_rate']}")
@@ -466,6 +478,8 @@ with tab_nodal:
                 st.plotly_chart(charts.lines(gdf,'Gas-lift injection [Sm3/d]',['Liquid rate [m3/d]'],'Gas-lift performance curve','Sm³/d liquid',colors={'Liquid rate [m3/d]':charts.OIL}),use_container_width=True)
                 st.success(f"Maximum liquid {best['Liquid rate [m3/d]']:,.0f} Sm³/d at {best['Gas-lift injection [Sm3/d]']:,.0f} Sm³/d injection (screening — no valve or compressor model).")
         st.caption('Artificial-lift outputs are screening calculations. Use calibrated VLP and vendor ESP/gas-lift design models before equipment selection.')
+        st.markdown('---')
+        render_nodal_tools(st,wid,w['name'],prm,float(whp),st.session_state.nodes,st.session_state.edges,graph_hash(st.session_state.nodes,st.session_state.edges),reset=reset_solve)
     else: st.info('Add a well to run nodal analysis.')
 
 with tab_tanks:
@@ -636,6 +650,12 @@ with tab_cal:
 with tab_forecast:
     render_forecast(st, st.session_state.nodes, st.session_state.edges)
 
+with tab_annual:
+    render_annual(st,current_hub(st,st.session_state.nodes,st.session_state.edges,solved))
+
+with tab_groups:
+    render_groups(st,st.session_state.nodes,st.session_state.edges,current_hub(st,st.session_state.nodes,st.session_state.edges,solved),solved,reset_solve)
+
 with tab_dev26:
     render_schedule(st, st.session_state.nodes, st.session_state.edges)
 
@@ -680,6 +700,20 @@ with tab_res25:
             led=st.data_editor(link_df,hide_index=True,use_container_width=True,disabled=['From','To'],key='comm_tbl_'+str(abs(hash(link_df.to_json()))))
             if apply_communication_table(st.session_state.nodes,led): st.rerun()
         else: st.caption('No communication links: tanks deplete independently.')
+        _tk=[t for t in st.session_state.nodes if t.get('kind')=='reservoir']
+        if len(_tk)>=2:
+            with st.expander('Add or remove a link between two tanks',expanded=link_df.empty):
+                _nm={t['id']:t.get('name') or t['id'] for t in _tk}; l1,l2,l3,l4=st.columns([2,2,2,1])
+                _la=l1.selectbox('Tank A',list(_nm),format_func=_nm.get,key='lnk_a'); _lb=l2.selectbox('Tank B',[k for k in _nm if k!=_la],format_func=_nm.get,key='lnk_b')
+                _lt=l3.number_input('Transmissibility [m3/d/bar]',0.0,1e7,100.0,10.0,key='lnk_t'); l4.write('')
+                if l4.button('Add link',key='lnk_add',use_container_width=True):
+                    try: _tc.add_link(st.session_state.nodes,_la,_lb,_lt); reset_solve(); st.session_state.pop('hub_cache',None); st.rerun()
+                    except ValueError as _exc: st.error(str(_exc))
+                if not link_df.empty:
+                    _rm=st.selectbox('Remove link',[f"{r['_from_id']}|{r['_to_id']}" for r in link_df.to_dict('records')],format_func=lambda k: ' ↔ '.join(_nm.get(x,x) for x in k.split('|')),key='lnk_rm')
+                    if st.button('Remove selected link',key='lnk_rm_btn'): _tc.remove_link(st.session_state.nodes,*_rm.split('|')); reset_solve(); st.session_state.pop('hub_cache',None); st.rerun()
+            _dyn=_tc.link_dynamics(st.session_state.nodes)
+            if not _dyn.empty: st.caption('How strongly the links couple the tanks (time constant of pressure equalisation, from the initial state):'); st.dataframe(_dyn,hide_index=True,use_container_width=True)
         a_,b_,c_=st.columns(3)
         cstart=a_.date_input('Forecast start',key='coup_start').isoformat(); cyrs=b_.number_input('Years',0.02,50.0,5.0,0.5,key='coup_years'); cstep=c_.selectbox('Time step [days]',[7,14,30,60,90],index=2,key='coup_step')
         for rb in run_button(st,'Run forecast with tank coupling',key='rb_run_forecast_with_tank_coupling',type='primary',model_hash=graph_hash(st.session_state.nodes,st.session_state.edges)):
@@ -691,6 +725,7 @@ with tab_res25:
         if fc_ and fc_.get('tanks'):
             tf_=pd.DataFrame(fc_['tanks']); st.plotly_chart(charts.style(px.line(tf_,x='Date',y='Pressure [bar]',color='Tank',title='Tank pressure'),y='Pressure [bar]'),use_container_width=True)
             if 'Net communication [m3]' in tf_ and tf_['Net communication [m3]'].abs().max()>0: st.plotly_chart(charts.style(px.line(tf_,x='Date',y='Net communication [m3]',color='Tank',title='Net volume received through communication links'),y='m³'),use_container_width=True)
+    if not tank_df.empty: render_mb(st,st.session_state.nodes,st.session_state.edges,current_hub(st,st.session_state.nodes,st.session_state.edges,solved))
     with st.expander('Legacy table-based coupling (separate tank / mapping tables)'):
         st.subheader('Multi-tank reservoir coupling')
         st.caption('Reduced-order quasi-steady material balance coupled to the production network. Communicating tanks, aquifer influx and injector connectivity are planning models—not a 3-D reservoir simulator.')
@@ -751,7 +786,10 @@ with tab_pvt:
 
 
 with G[6]:
-    render_cases(st,solved=solved,reset=reset_solve)
+    _c_tpl,_c_cases,_c_data=st.tabs(['Templates & examples','Cases','Data hub, export & post-processing'])
+    with _c_tpl: render_templates(st,reset=reset_solve,library=library(st),solved=solved)
+    with _c_cases: render_cases(st,solved=solved,reset=reset_solve)
+    with _c_data: render_data(st,st.session_state.nodes,st.session_state.edges,current_hub(st,st.session_state.nodes,st.session_state.edges,solved),solved)
 
 
 with tab_io27:
