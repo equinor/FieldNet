@@ -30,10 +30,15 @@ def diagram_labels(node_rows, edge_rows):
     return labels, rates
 
 
-def network_svg_at(nodes, edges, fc, date):
+def network_svg_at(nodes, edges, fc, date, mode=None, phase=None, thickness=True):
+    """Network diagram at one report date. Line thickness grows with the flow on that date, on a scale fixed by the largest flow of any date."""
     from ui.svg_export import network_svg
+    from network.net_display import labels_from_rows, edge_widths, max_flow, AUTO
     nr, er = state_at(fc, date); labels, rates = diagram_labels(nr, er)
-    return network_svg(nodes, edges, labels=labels, rates=rates, title=f'Network at {date}')
+    elabels = {}
+    if mode is not None or phase is not None: labels, elabels = labels_from_rows(nr, er, mode or AUTO, phase)
+    widths = edge_widths(rates, qmax=max_flow(fc.get('edges', []))) if thickness else None
+    return network_svg(nodes, edges, labels=labels, rates=rates, title=f'Network at {date}', edge_labels=elabels, widths=widths)
 
 
 def render_results_browser(st, nodes, edges, fc, key='rb'):
@@ -50,7 +55,10 @@ def render_results_browser(st, nodes, edges, fc, key='rb'):
         (gas_m(c[0]), oil_m(c[2])) if gas else (oil_m(c[0]), gas_m(c[2])); c[1].metric('Water', f"{frow.get('Water [m3/d]', 0):,.0f} m³/d")
         c[3].metric('Wells flowing', f"{frow.get('Wells flowing', 0)}")
         c[4].metric('Cumulative gas', f"{frow.get('Cumulative gas [Sm3]', 0)/1e9:,.2f} GSm³") if gas else c[4].metric('Cumulative oil', f"{frow.get('Cumulative oil [Sm3]', 0)/1e6:,.2f} MSm³")
-    svg = network_svg_at(nodes, edges, fc, date)
+    from network.net_display import MODES, AUTO
+    o1, o2 = st.columns([2, 1])
+    show = o1.selectbox('Show on network', MODES, index=0, key=f'{key}_show'); thick = o2.checkbox('Line thickness follows flow', value=True, key=f'{key}_thick', help='Scaled to the largest flow of any report date, so moving the slider shows lines growing and thinning.')
+    svg = network_svg_at(nodes, edges, fc, date, mode=show, phase=st.session_state.get('_phase_resolved'), thickness=thick)
     try:
         import streamlit.components.v1 as components
         components.html(f'<div style="overflow:auto">{svg}</div>', height=620, scrolling=True)

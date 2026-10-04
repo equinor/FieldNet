@@ -14,7 +14,7 @@ def render_annual(st, hub, key='an'):
                'Years the forecast does not fully cover are drawn lighter.')
     avail = {k: v for k, v in SOURCES.items() if v[0] in hub.datasets}
     if 'annual_field' not in hub.datasets:
-        st.info('Run a forecast on the Production forecast tab first - the yearly bars are computed from it.' + (' (The forecast on screen is out of date for the current model.)' if hub.info.get('stale_forecast') else '')); return
+        st.info('Run a forecast on the Development schedule tab first - the yearly bars are computed from it.' + (' (The forecast on screen is out of date for the current model.)' if hub.info.get('stale_forecast') else '')); return
     c1, c2, c3 = st.columns([1, 2, 2])
     src = c1.radio('Show', list(avail), key=f'{key}_src', horizontal=False)
     ds, ent = avail[src]; raw = hub.datasets[ds]

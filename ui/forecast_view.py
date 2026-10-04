@@ -110,7 +110,7 @@ def _drive_run(st, nodes, edges):
 
 
 def render_forecast(st, nodes, edges):
-    st.subheader('Production forecast')
+    st.subheader('Development schedule & production forecast')
     st.caption('Quasi-steady life-of-field prognosis: every step re-solves the full network with tank pressures from material balance (in-place volume, fluid phase, aquifer and injection support). Screening model, not a reservoir simulator.')
     wells = [n for n in nodes if n.get('kind') == 'well']; tanks = [n for n in nodes if n.get('kind') == 'reservoir']
     linked = [w for w in wells if (w.get('params') or {}).get('reservoir_id') in {t['id'] for t in tanks}]
@@ -142,10 +142,29 @@ def render_forecast(st, nodes, edges):
             st.caption('Shut in or start up wells, change rate limits, separator pressure, flowline diameter ... Pick the event, the element and the date; values use your unit profile. The same schedule is used by the Development schedule and Scenarios tabs.')
             sched = render_event_builder(st, nodes, edges, None, st.session_state.get('unit_profile', 'norwegian_si'), key_prefix='evb_fc', start_date=start)
         store_el = st.toggle('Store per-element profiles (slower, needed by the Element results tab)', value=True, key='fc_store_el')
+        use_drill = st.toggle('Phase wells in with a drilling schedule', value=False, key='fc_use_drill',
+                              help='Off: every well is on stream at the start date (plain production forecast). On: wells come on stream when their rig slot finishes, and the result is compared with having all wells at start.')
+        rigs = drill_df = None; compare = False
+        if use_drill:
+            from ui import drilling_plan as dp
+            rigs, drill_df = dp.table(st, nodes)
+            compare = st.toggle('Compare with all wells on stream at start', value=True, key='sch_cmp')
         _ctl0 = st.session_state.get('fc_ctl')
         if _ctl0 is not None: style_button(st, 'fc_run', {'done': 'done', 'running': 'running', 'paused': 'running', 'failed': 'failed'}.get(_ctl0.status, 'none'))
         run = st.button('▶ Run forecast', type='primary', use_container_width=True, key='fc_run')
-    if run:
+    if run and use_drill and drill_df is not None:
+        from ui import drilling_plan as dp
+        ids = {str(x.get('id')) for x in [*nodes, *edges]}; events = [e for e in events_to_forecast(sched) if e['target_id'] in ids]
+        old = st.session_state.get('fc_ctl')
+        if old is not None and old.active: old.stop()
+        bar = st.progress(0.0, text='Development plan…')
+        try:
+            res, base = dp.run(nodes, edges, start, float(years), int(step), bool(caps), drill_df, rigs, events, compare, _step_solver(st), progress=lambda f, t: bar.progress(min(max(f, 0.0), 1.0), text=t))
+            st.session_state.sched_result = res; st.session_state.sched_base = base; st.session_state.forecast = res['forecast']
+            st.session_state.forecast_hash = graph_hash(nodes, edges); st.session_state['_fc_mode'] = 'drill'; bar.progress(1.0, text='Finished')
+        except Exception as exc: st.error(f'Development plan failed: {exc}')
+    elif run:
+        st.session_state['_fc_mode'] = 'plain'; st.session_state.pop('sched_result', None); st.session_state.pop('sched_base', None)
         ids = {str(x.get('id')) for x in [*nodes, *edges]}
         bad = [f'unknown target {e.target_id!r}' for e in sched if str(e.target_id) not in ids]
         events = [e for e in events_to_forecast(sched) if e['target_id'] in ids]
@@ -160,7 +179,26 @@ def render_forecast(st, nodes, edges):
     if not (fc and fc.get('field')):
         st.info('Set the horizon and press **Run forecast**.'); return
     if st.session_state.get('forecast_hash') != graph_hash(nodes, edges): st.warning('The model changed since this forecast was run — results below are out of date.')
-    k = forecast_kpis(fc); kpi_row(st, k)
+    k = forecast_kpis(fc)
+    res_d = st.session_state.get('sched_result') if st.session_state.get('_fc_mode') == 'drill' else None
+    if res_d:
+        sch = pd.DataFrame(res_d['development_plan']['schedule'])
+        if not sch.empty:
+            sch = sch.assign(finish=[f if f > s0 else (pd.Timestamp(s0) + pd.Timedelta(days=1)).date().isoformat() for s0, f in zip(sch['start'], sch['finish'])])
+            st.plotly_chart(charts.gantt(sch, 'Drilling schedule'), use_container_width=True, key='sch_gantt')
+        st.markdown(f"**First production:** {k.get('first_oil') or '—'}")
+    kpi_row(st, k)
+    if res_d:
+        phase_gas = __import__('network.phase_pref', fromlist=['current']).current(st) == 'Gas'
+        col, unit, kk = ('Gas [Sm3/d]', 'MSm³/d', 1e6) if phase_gas else ('Oil [m3/d]', 'Sm³/d', 1.0)
+        fdf0 = pd.DataFrame(fc['field']); comp = pd.DataFrame({'Date': fdf0['Date'], 'Scheduled': fdf0[col] / kk}); cols = ['Scheduled']; base = st.session_state.get('sched_base')
+        if base:
+            comp['All wells at start'] = pd.DataFrame(base['field'])[col].values[:len(comp)] / kk; cols.append('All wells at start')
+            kb = forecast_kpis(base); key_c = 'cum_gas_sm3' if phase_gas else 'cum_oil_sm3'
+            st.caption(f"Phasing the wells defers {fmt(kb.get(key_c, 0) - k.get(key_c, 0), 'GSm³' if phase_gas else 'MSm³', 1e9 if phase_gas else 1e6, 2)} of {'gas' if phase_gas else 'oil'} over the horizon compared with having every well on stream at start.")
+        a, b = st.columns(2)
+        a.plotly_chart(charts.lines(comp, 'Date', cols, f"{'Gas' if phase_gas else 'Oil'} rate: schedule vs all wells at start", unit, colors={'Scheduled': charts.GAS if phase_gas else charts.OIL, 'All wells at start': charts.LIQUID}, dash={'All wells at start': 'dot'}), use_container_width=True, key='sch_cmp_chart')
+        b.plotly_chart(charts.lines(fdf0, 'Date', ['Wells flowing'], 'Producers on stream', 'wells', colors={'Wells flowing': charts.CATEGORICAL[0]}), use_container_width=True, key='sch_wells')
     nonconv = sum(1 for r in fc['field'] if not r.get('Converged'))
     if nonconv: st.warning(f'{nonconv} timestep(s) did not converge — check the Model assurance tab.')
     if k.get('peak_oil_m3d', 0) <= 0:

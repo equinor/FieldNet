@@ -143,3 +143,29 @@ def test_primary_phase_switch_renders_everywhere():
         r1 = run_app(APP, {'nodes': n, 'edges': e, 'primary_phase_pref': pref, 'fc_years': 1.0, 'fc_step': 180}, pressed={'solve_btn_top', 'fc_run'}); _no_errors(r1)
         ss = r1.session_state; assert ss['_phase_resolved'] == (pref if pref != 'Auto' else ('Gas' if 'gas' in key else 'Oil')), (key, pref)
         _no_errors(run_app(APP, dict(ss, nodal_well=next(x['id'] for x in n if x['kind'] == 'well'))))
+
+
+def test_line_thickness_follows_flow_and_date_slider():
+    from network.net_display import edge_widths, labels_from_rows, max_flow
+    w = edge_widths({'a': 100.0, 'b': 25.0, 'c': 0.0, 'd': -100.0}); assert w['a'] == w['d'] > w['b'] > w['c'] == 1.0 and abs(w['b'] - (1.5 + 9.5 * 0.5)) < 1e-9
+    assert edge_widths({'a': 50.0}, qmax=100.0)['a'] < edge_widths({'a': 100.0}, qmax=100.0)['a']
+    from network.forecast import run_forecast
+    from ui.results_browser import network_svg_at
+    n, e = build('daisy_chain_oil'); fc = run_forecast(n, e, '2028-01-01', years=2, step_days=180)
+    d0, d1 = fc['field'][0]['Date'], fc['field'][-1]['Date']
+    a = network_svg_at(n, e, fc, d0); b = network_svg_at(n, e, fc, d1); c = network_svg_at(n, e, fc, d0, thickness=False)
+    assert a != b and c != a
+    import re
+    wa = sorted(set(re.findall(r'stroke="#456" stroke-width="([\d.]+)"', a))); assert len(wa) > 2
+    nr = [r for r in fc['nodes'] if r['Date'] == d0]; er = [r for r in fc['edges'] if r['Date'] == d0]
+    nl, el = labels_from_rows(nr, er, 'Gas rate'); assert nl and all('MSm' in v or v in ('pipeline', 'pump') or 'kSm' in v for v in el.values())
+    assert max_flow(fc['edges']) > 0
+
+
+def test_merged_development_schedule_tab():
+    n, e = build('daisy_chain_oil')
+    r = run_app(APP, {'nodes': n, 'edges': e, 'fc_years': 1.0, 'fc_step': 180, 'fc_use_drill': True, 'sch_rigs': 2}, pressed={'fc_run'}); _no_errors(r)
+    ss = r.session_state; assert ss['_fc_mode'] == 'drill' and ss['forecast'] and ss['sched_result']
+    first = [row for row in ss['forecast']['field']][0]; assert first['Wells flowing'] < 6          # phased in, not all at start
+    r2 = run_app(APP, dict(ss, fc_use_drill=False), pressed={'fc_run'}); _no_errors(r2)
+    assert r2.session_state['_fc_mode'] == 'plain' and r2.session_state['forecast']['field'][0]['Wells flowing'] == 6 and 'sched_result' not in r2.session_state

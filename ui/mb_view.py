@@ -51,7 +51,7 @@ def render_mb(st, nodes, edges, hub):
     tid = c1.selectbox('Tank', list(names), format_func=names.get, key='mb_tank'); src = c2.radio('Data', ['Forecast of the model', 'Measured history'], horizontal=True, key='mb_src')
     tank = tanks_from_nodes(nodes)[tid]; fc = getattr(hub, 'forecast', None)
     if src == 'Forecast of the model':
-        if not (fc and fc.get('tanks')): st.info('Run a forecast first (Production forecast tab, or the button above) - there is nothing to analyse yet.'); return
+        if not (fc and fc.get('tanks')): st.info('Run a forecast first (Development schedule tab, or the button above) - there is nothing to analyse yet.'); return
         series = mb.series_from_forecast(fc, tid)
         if len(series) < 3: st.info('The forecast has too few steps for this tank.'); return
     else:

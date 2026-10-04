@@ -45,7 +45,7 @@ from ui.graph_contract import set_edge_kind, graph_hash, SOLVED, solver_input
 from network.features import palette as feature_palette
 from ui.canvas_labels import canvas_labels
 from network.phase_pref import PREFS as PHASE_PREFS, resolve as resolve_phase
-from network.net_display import label_maps, MODES as NET_MODES, AUTO as NET_AUTO, browse_frame, NODE_PARAMS, EDGE_PARAMS
+from network.net_display import edge_widths, label_maps, MODES as NET_MODES, AUTO as NET_AUTO, browse_frame, NODE_PARAMS, EDGE_PARAMS
 from ui.compute_panel import render_compute_settings
 from ui.element_view import render_element_results
 from ui.tank_coupling import tank_coupling_table, communication_table, apply_communication_table
@@ -68,7 +68,7 @@ from ui.forecast_view import render_forecast
 from ui.advanced_view import render_advanced, calibration as render_well_test_calibration
 from ui.run_button import run_button, style_button
 from ui.prediction_view import render_prediction_sources
-from ui.development_view import render_schedule, render_scenarios
+from ui.development_view import render_scenarios
 from ui.constraints_view import render_constraint_editor
 from ui import charts
 from network.reservoir_mb import apply_tank_links, tank_summary, TANK_DEFAULTS
@@ -200,7 +200,7 @@ G=st.tabs(['🗺️ Network','🛢️ Reservoir & wells','📊 Results','📈 Pr
 tab_net=G[0]
 with G[1]: tab_nodal,tab_tanks,tab_groups,tab_sources,tab_pvt=st.tabs(['Nodal analysis','Tanks & coupling','Groups','Prediction source','Fluid & PVT'])
 with G[2]: tab_results,tab_diag,tab_elem=st.tabs(['Summary & constraints','Profiles & flow assurance','Element results'])
-with G[3]: tab_forecast,tab_annual,tab_avail,tab_dev26,tab_development=st.tabs(['Production forecast','Yearly profiles','Availability & downtime','Development schedule','Scenarios & well count'])
+with G[3]: tab_forecast,tab_annual,tab_avail,tab_development=st.tabs(['Development schedule','Yearly profiles','Availability & downtime','Scenarios & well count'])
 with G[4]: tab_cal=st.container()
 with G[5]: tab_uncertainty,tab_rel=st.tabs(['Monte Carlo','Reliability'])
 with G[7]: tab_ops,tab_qa28,tab_io27=st.tabs(['Engineering tools','Model checks','Import / export & snapshots'])
@@ -222,11 +222,13 @@ with tab_net:
         tb3.caption(f"{'🟢' if status==SOLVED else '🟡' if status==SOLVING else '🔴' if status==FAILED else '⚪'} {status}")
         compute=render_compute_settings(st,st.session_state.nodes,st.session_state.edges,honour=_honour)
         _show=st.selectbox('Show on network',NET_MODES,index=0,key='net_show',help='What is printed on the components and flowlines after a solve. Auto shows liquid rate and water cut for an oil field and the gas rate (MSm³/d) for a gas field.')
+        _thick=st.checkbox('Line thickness follows flow',value=True,key='net_thick',help='Thicker lines carry more flow (scaled to the largest flow in the network).')
+        _ew=edge_widths(solved()[1]) if (_thick and solved()) else {}
         try: _nlab,_elab=label_maps(st.session_state.nodes,st.session_state.edges,solved(),_show,phase=st.session_state.get('_phase_resolved'))
         except Exception: _nlab,_elab=canvas_labels(st.session_state.nodes,solved()),{}
         edit=network_editor(st.session_state.nodes, st.session_state.edges, solved(), key='network-v14', height=_edh,
                             status=status, status_message=status_msg, selected=st.session_state.get('selected'),
-                            palette=feature_palette(), labels=_nlab, edge_labels=_elab)
+                            palette=feature_palette(), labels=_nlab, edge_labels=_elab, edge_widths=_ew)
         # One contract (ui/graph_contract.py): only a new canvas revision is an edit; stale replays are ignored.
         if accept_canvas_payload(st.session_state, edit)=='graph': st.rerun()
         for msg in st.session_state.pop('graph_issues',[]) or []: st.warning(msg)
@@ -411,7 +413,7 @@ with tab_net:
         if st.session_state['_panel_reruns']<=2: st.rerun()
     else: st.session_state['_panel_reruns']=0
     c1,c2,c3=st.columns([1,1,1])
-    payload=json.dumps(to_builtin({'version':'30','application':'FieldNet v30','storage_units':'canonical','display_unit_profile':PROFILE,'standard_conditions':STANDARD_CONDITIONS,'nodes':st.session_state.nodes,'edges':st.session_state.edges}),indent=2,default=str); c3.download_button('Export network SVG',network_svg(st.session_state.nodes,st.session_state.edges,_nlab,(solved() or ({},{},{},{}))[1],edge_labels=_elab),'fieldnet_network.svg','image/svg+xml',use_container_width=True)
+    payload=json.dumps(to_builtin({'version':'30','application':'FieldNet v30','storage_units':'canonical','display_unit_profile':PROFILE,'standard_conditions':STANDARD_CONDITIONS,'nodes':st.session_state.nodes,'edges':st.session_state.edges}),indent=2,default=str); c3.download_button('Export network SVG',network_svg(st.session_state.nodes,st.session_state.edges,_nlab,(solved() or ({},{},{},{}))[1],edge_labels=_elab,widths=_ew),'fieldnet_network.svg','image/svg+xml',use_container_width=True)
     c2.download_button('Export case JSON',payload,'fieldnet_case.json','application/json',use_container_width=True)
     uploaded=st.file_uploader('Load FieldNet project JSON',type=['json'],key='project_upload')
     if uploaded is not None and st.button('Load project',use_container_width=True):
@@ -689,9 +691,6 @@ with tab_annual:
 
 with tab_groups:
     render_groups(st,st.session_state.nodes,st.session_state.edges,current_hub(st,st.session_state.nodes,st.session_state.edges,solved),solved,reset_solve)
-
-with tab_dev26:
-    render_schedule(st, st.session_state.nodes, st.session_state.edges)
 
 with tab_development:
     render_scenarios(st, st.session_state.nodes, st.session_state.edges)

@@ -53,10 +53,10 @@ def test_advanced_panels_run_with_solved_demo_and_forecast():
 def test_development_plan_runs_with_progress_and_results_browser():
     from network.examples import demo_field_case
     n, e = demo_field_case()
-    root = run_app(APP, {'nodes': n, 'edges': e, 'sch_years': 1.0}, pressed={'sch_run'})
+    root = run_app(APP, {'nodes': n, 'edges': e, 'fc_years': 1.0, 'fc_use_drill': True}, pressed={'fc_run'})
     s = root.session_state
     assert s.get('sched_result'), 'development plan did not run'
-    assert s.get('_rb_sch_run', {}).get('status') == 'done'
+    assert s.get('forecast') and s.get('_fc_mode') == 'drill'
     errs = [c for c in root.calls if c[0] == 'error']; assert not errs, errs
     assert any(c == ('markdown', '#### Network at a chosen date') for c in root.calls)
 

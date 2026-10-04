@@ -106,3 +106,33 @@ def browse_frame(nodes, edges, results, scope, parameter):
         if v is None: continue
         out.append({'Name': r.get('Name'), 'Kind': r.get('Kind'), label: float(v) / (1e6 if parameter == 'Gas [Sm3/d]' else 1.0)})
     return pd.DataFrame(out)
+
+
+# ------------------------------------------------------------------ line thickness and labels from stored rows
+def edge_widths(flows, qmax=None, wmin=1.5, wmax=11.0):
+    """{edge_id: stroke width in px} growing with the square root of |flow| (so a line with a quarter of the maximum flow is half as thick as the thickest).
+    ``qmax`` fixes the scale (use the maximum over all report dates so thickness is comparable while moving the date slider). Lines without flow get 1 px."""
+    vals = {k: abs(float(v)) for k, v in (flows or {}).items() if v is not None}
+    top = float(qmax) if qmax else (max(vals.values()) if vals else 0.0)
+    out = {}
+    for k, v in vals.items():
+        out[k] = 1.0 if v < 1e-6 or top <= 0 else wmin + (wmax - wmin) * (min(v / top, 1.0) ** 0.5)
+    return out
+
+
+def max_flow(edge_rows):
+    return max([abs(r.get('Flow [m3/d]') or 0.0) for r in edge_rows] or [0.0])
+
+
+def labels_from_rows(node_rows, edge_rows, mode=AUTO, phase=None):
+    """Same texts as :func:`label_maps` but from stored element rows (forecast report dates)."""
+    m = resolve_mode(mode, node_rows, phase)
+    if m.startswith('Nothing'): return {}, {r['Edge ID']: (r.get('Kind') or 'pipeline') for r in edge_rows}
+    nl = {}
+    for r in node_rows:
+        if r.get('Kind') in _SKIP_NODE: continue
+        status = r.get('Status')
+        if status in ('shut_in', 'dead', 'shut_in_below_min_rate'): nl[r['Node ID']] = f"{status.replace('_', ' ')} · {r.get('Pressure [bar]') or 0:.1f} bar"; continue
+        txt = _node_text(m, r) or _node_text('Pressure', r)
+        if txt is not None: nl[r['Node ID']] = txt
+    return nl, {r['Edge ID']: _edge_text(m, r) for r in edge_rows}

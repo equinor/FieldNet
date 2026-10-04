@@ -14,7 +14,7 @@ def _size(n):
     return W, H
 
 
-def network_svg(nodes, edges, labels=None, rates=None, title='FieldNet network', edge_labels=None):
+def network_svg(nodes, edges, labels=None, rates=None, title='FieldNet network', edge_labels=None, widths=None):
     edge_labels = edge_labels or {}; labels = labels or {}; rates = rates or {}; byid = {n['id']: n for n in nodes}
     if not nodes: return '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="60"><text x="10" y="30">Empty network</text></svg>'
     def port(nid, out):
@@ -25,7 +25,7 @@ def network_svg(nodes, edges, labels=None, rates=None, title='FieldNet network',
     xs1 = max(float(n.get('x') or 0) + _size(n)[0] + 110 for n in nodes) + 30; ys1 = max(float(n.get('y') or 0) + _size(n)[1] for n in nodes) + 30
     o = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{xs0:.0f} {ys0:.0f} {xs1-xs0:.0f} {ys1-ys0:.0f}" width="{xs1-xs0:.0f}" height="{ys1-ys0:.0f}" font-family="Segoe UI,Arial,sans-serif">',
          f'<title>{escape(title)}</title><rect x="{xs0:.0f}" y="{ys0:.0f}" width="{xs1-xs0:.0f}" height="{ys1-ys0:.0f}" fill="#fff"/>',
-         '<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#456"/></marker></defs>']
+         '<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="14" markerHeight="14" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#456"/></marker></defs>']
     for n in nodes:
         rid = (n.get('params') or {}).get('reservoir_id')
         if rid in byid: o.append(f'<path d="{curve(port(rid, True), port(n["id"], False))}" fill="none" stroke="#a1887f" stroke-width="2" stroke-dasharray="3 5"/>')
@@ -34,7 +34,7 @@ def network_svg(nodes, edges, labels=None, rates=None, title='FieldNet network',
     for e in edges:
         if e.get('source') not in byid or e.get('target') not in byid: continue
         a, b = port(e['source'], True), port(e['target'], False); q = rates.get(e['id'])
-        o.append(f'<path d="{curve(a, b)}" fill="none" stroke="#456" stroke-width="2" marker-end="url(#a)"/>')
+        wd = (widths or {}).get(e['id'], 2); o.append(f'<path d="{curve(a, b)}" fill="none" stroke="#456" stroke-width="{wd:.1f}" stroke-opacity="{0.45 if widths and wd <= 1.0 else 1}" marker-end="url(#a)"/>')
         txt = edge_labels.get(e['id']) or (e.get('kind', 'pipeline') + (f' • {q:,.0f} m³/d' if q is not None else ''))
         o.append(f'<text x="{(a[0]+b[0])/2:.1f}" y="{(a[1]+b[1])/2-6:.1f}" font-size="10" text-anchor="middle" fill="#234">{escape(txt)}</text>')
     for n in nodes:
