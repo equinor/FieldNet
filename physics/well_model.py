@@ -66,7 +66,11 @@ def well_settings(prm: dict) -> dict:
         try:
             geometry=tubing_segments(p); depth=max(float(well_total_depth(p)[1]),1.0)
         except Exception: geometry=None
+    from physics.thermal import well_thermal_inputs
+    tub_id=max(_f(p,'tubing_id_m',0.0762),1e-3)
     return {
+        'pvt_prm':{'pvt':p.get('pvt')} if p.get('pvt') else None,
+        'thermal':well_thermal_inputs(p,depth,tub_id),
         'geometry':geometry,
         'pr':max(_f(p,'reservoir_pressure_bar',200.0),0.0),
         'ipr_model':_ipr_name(p.get('ipr_model','PI')),
@@ -145,9 +149,11 @@ def esp_head_bar_simple(q, esp):
 
 def vlp_bhp(q, whp, s):
     """Bottom-hole pressure required to produce q at wellhead pressure whp, including lift."""
-    bhp,props=tubing_bhp_bar(max(q,0.0),whp,s['depth'],s['tubing_id'],s['roughness'],s['temperature'],s['water_cut'],s['gor'],s['api'],s['gas_sg'],
-                             s['correlation'],segments=s['segments'],extra_gas_sm3d=s['gas_lift_sm3d'],gas_injection_depth_m=s['gas_lift_depth'],
-                             bottomhole_temperature_c=s['bh_temperature'],geometry=s.get('geometry'))
+    from physics.pvt_model import fluid_scope
+    with fluid_scope(s.get('pvt_prm'),s['gor'],s['api'],s['gas_sg']):
+        bhp,props=tubing_bhp_bar(max(q,0.0),whp,s['depth'],s['tubing_id'],s['roughness'],s['temperature'],s['water_cut'],s['gor'],s['api'],s['gas_sg'],
+                                 s['correlation'],segments=s['segments'],extra_gas_sm3d=s['gas_lift_sm3d'],gas_injection_depth_m=s['gas_lift_depth'],
+                                 bottomhole_temperature_c=s['bh_temperature'],geometry=s.get('geometry'),thermal=s.get('thermal'))
     assist=s['lift_assist_bar']+esp_head_bar_simple(q,s['esp'])
     return bhp-assist, props
 
@@ -199,5 +205,6 @@ def well_state(q, whp, s):
     return {'liquid_rate_m3d':q,'oil_rate_m3d':oil,'water_rate_m3d':q*wc,'gas_rate_sm3d':oil*s['gor'],
             'gas_lift_sm3d':s['gas_lift_sm3d'],'bhp_bar':max(pwf,bhp) if q>1e-9 else bhp,'vlp_bhp_bar':bhp,'ipr_pwf_bar':pwf,
             'whp_bar':whp,'choke_dp_equivalent_bar':max(pwf-bhp,0.0) if q>1e-9 else 0.0,
+            'wellhead_temperature_c':props.get('wellhead_temperature_c',s['temperature']),
             'liquid_holdup':props.get('liquid_holdup',1.0),'gas_fraction':props.get('gas_fraction',0.0),'status':status,
             'reservoir_pressure_bar':s['pr'],'vlp_model':s['correlation'],'lift_type':s['lift_type']}

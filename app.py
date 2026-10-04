@@ -50,6 +50,7 @@ from ui.tank_coupling import tank_coupling_table, communication_table, apply_com
 from ui.svg_export import network_svg
 from network.solve_options import make_network_solver, make_step_solver as make_forecast_step_solver
 from network.parallel_solve import solve_parallel
+from network.thermal_network import with_thermal
 from ui.properties import (constraint_editor, role_phase_editor, separator_type_editor, trajectory_editor, flowline_profile_editor, relperm_editor, prediction_source_editor, communication_editor, correlation_select)
 from network.equipment import convert_edge_equipment_to_nodes, INLINE_KINDS
 from ui.history import normalize_project
@@ -72,6 +73,8 @@ from network.reservoir_mb import apply_tank_links, tank_summary, TANK_DEFAULTS
 from network.examples import demo_field_case
 from ui.interchange_v27 import render_interchange_v27
 from ui.scenario_v29 import render_scenario_v29
+from ui.cases_view import render_cases
+from ui.pvt_view import render_pvt
 from solver.model_assurance_v28 import model_quality_report
 from physics.unit_system import (PROFILES, labels as unit_labels, STANDARD_CONDITIONS, pressure_to_display, pressure_from_display, temperature_to_display, temperature_from_display, length_to_display, length_from_display, diameter_to_display, diameter_from_display, liquid_rate_to_display, liquid_rate_from_display, gor_to_display, gor_from_display, pi_to_display, pi_from_display, velocity_to_display, heat_transfer_u_to_display, heat_transfer_u_from_display)
 from ui.uncertainty_v17 import render_uncertainty
@@ -174,14 +177,14 @@ with st.sidebar:
     st.caption('Connect components in the editor: drag from an OUT port onto another component’s IN port.')
     if st.button('Load demo field',use_container_width=True): st.session_state.nodes,st.session_state.edges=demo_field_case(); reset_solve(); [st.session_state.pop(k,None) for k in ('forecast','sched_result','scn_results','wc_result')]; st.rerun()
 
-G=st.tabs(['🗺️ Network','🛢️ Reservoir & wells','📊 Results','📈 Prognosis','🎯 Calibration','🎲 Uncertainty','🧰 Tools'])
+G=st.tabs(['🗺️ Network','🛢️ Reservoir & wells','📊 Results','📈 Prognosis','🎯 Calibration','🎲 Uncertainty','📁 Cases','🧰 Tools'])
 tab_net=G[0]
-with G[1]: tab_nodal,tab_tanks,tab_sources=st.tabs(['Nodal analysis','Tanks & coupling','Prediction source'])
+with G[1]: tab_nodal,tab_tanks,tab_sources,tab_pvt=st.tabs(['Nodal analysis','Tanks & coupling','Prediction source','Fluid & PVT'])
 with G[2]: tab_results,tab_diag,tab_elem=st.tabs(['Summary & constraints','Profiles & flow assurance','Element results'])
 with G[3]: tab_forecast,tab_dev26,tab_development=st.tabs(['Production forecast','Development schedule','Scenarios & well count'])
 with G[4]: tab_cal=st.container()
 with G[5]: tab_uncertainty,tab_rel=st.tabs(['Monte Carlo','Reliability'])
-with G[6]: tab_ops,tab_qa28,tab_io27=st.tabs(['Engineering tools','Model checks','Import / export & snapshots'])
+with G[7]: tab_ops,tab_qa28,tab_io27=st.tabs(['Engineering tools','Model checks','Import / export & snapshots'])
 # merged sections: blocks below write into the same tab in code order
 tab_constraints=tab_results; tab_fa=tab_diag; tab_res25=tab_tanks; tab_comp=tab_ops; tab_adv=tab_ops; tab_scen29=tab_io27
 with tab_net:
@@ -211,7 +214,7 @@ with tab_net:
             if True:
                 _pbar.progress(0.25,text='Solving network'+(' and optimising well controls…' if compute['optimizer']['enabled'] else ' (honouring constraints)…' if compute['honour'] else '…'))
                 _base=make_network_solver(compute)
-                _solver=(lambda n_,e_,warm_start=None,attempts=3,**kw: solve_parallel(n_,e_,solve_v21,compute['workers'],warm_start=warm_start,attempts=attempts,enforce_constraints=compute['honour'])) if compute['workers']>1 and not compute['optimizer']['enabled'] else _base
+                _solver=with_thermal((lambda n_,e_,warm_start=None,attempts=3,**kw: solve_parallel(n_,e_,solve_v21,compute['workers'],warm_start=warm_start,attempts=attempts,enforce_constraints=compute['honour']))) if compute['workers']>1 and not compute['optimizer']['enabled'] else _base
                 run_solve(st.session_state, _solver, warm_start=st.session_state.get('v21_warm_start'), attempts=3)
                 _pbar.progress(1.0,text=f'Finished in {time.perf_counter()-_t0:.1f} s')
             st.rerun()
@@ -741,6 +744,14 @@ with tab_res25:
             st.download_button('Download coupling JSON',json.dumps(to_builtin(rr),indent=2,default=str),'fieldnet_reservoir_coupling.json','application/json',use_container_width=True)
 
 
+
+
+with tab_pvt:
+    render_pvt(st,st.session_state.nodes,st.session_state.edges,solved)
+
+
+with G[6]:
+    render_cases(st,solved=solved,reset=reset_solve)
 
 
 with tab_io27:

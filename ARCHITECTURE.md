@@ -596,3 +596,17 @@ See [API_REFERENCE.md](API_REFERENCE.md) for solver and tank equations, and [EXA
 - `solver/constraints.py` registry shared by solve / forecast / development; `solver/v21.py` enforces `ENFORCEABLE` ones.
 - `network/solve_options.py` + `network/parallel_solve.py` compute layer (honour constraints, optimiser, parallel components).
 - `network/element_results.py` per-element profiles; `ui/properties.py`, `ui/element_view.py`, `ui/compute_panel.py`, `ui/tank_coupling.py` UI helpers; `ui/svg_export.py`.
+
+
+## v32.3 case management
+- `network/case_manager.py` - pure functions/classes: `CaseLibrary` (add/save/duplicate/copy_into/rename/delete, `to_dict`), `new_case`, `solve_summary`, `compare_table`, `case_diff`, `profile_series`, JSON/ZIP (checksummed) export and import.
+- `network/case_share.py` - `.fncase` = `FNCASE1 | salt | nonce | AES-256-GCM(zlib(JSON))`; scrypt n=2^15; link = URL-safe base64 with prefix `fieldnet-share:`.
+- `ui/cases_view.py` - `render_cases(st, solved=, reset=)`; library kept in `st.session_state['case_library']`.
+- Recommended next step for real collaboration: a shared store (S3/Azure blob or a small FastAPI + SQLite) holding the same `.fncase` blobs, with the password-derived key kept client-side. The case format already supports this unchanged.
+
+
+## v32.4 PVT and thermal
+- `physics/pvt_model.py` - `FluidSpec` / `Calibration` / `FluidModel.state(p,T)` (returns the same `BlackOilState` as the legacy model), `calibrate`, `rank_correlations`. The active fluid is a context variable (`fluid_scope(params)`) read by `physics.multiphase.mixture_properties`, so no correlation signature changed. `solver.equations.pipeline_march` and `physics.well_model.vlp_bhp` enter the scope from the element's `params['pvt']`.
+- `physics/thermal.py` - `Stream`, `advance_segment` (energy balance), Ramey profile. `physics/vlp.tubing_bhp_bar(thermal=...)`, `solver.equations.pipeline_march(t_in, profile)`.
+- `network/thermal_network.py` - `thermal_pass`, `with_thermal(solver)` (wraps the Network-tab solver; no-op without thermal elements).
+- `physics/gas_quality.py`, `ui/pvt_view.py`.

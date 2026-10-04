@@ -46,4 +46,5 @@ def make_network_solver(compute):
     def solve(nodes, edges, warm_start=None, attempts=3, enforce_constraints=None, **kw):
         if step is not None: return step(nodes, edges, warm_start)
         return solve_v21(nodes, edges, warm_start=warm_start, attempts=attempts, enforce_constraints=c['honour'] if enforce_constraints is None else bool(enforce_constraints), **kw)
-    return solve
+    from network.thermal_network import with_thermal
+    return with_thermal(solve)   # no-op unless an element uses thermal_model 'heat_loss' / 'ramey'

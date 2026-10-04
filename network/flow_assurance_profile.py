@@ -171,6 +171,20 @@ def temperature_profile(rows, t_in_c, t_amb_c, u, d_m, cp):
     return t
 
 
+def thermal_energy_profile(rows, t_in_c, prm, d_m, q, wc, ph=None):
+    """Temperature at every profile row from the energy balance of ``physics.thermal`` (heat loss + JT + elevation)."""
+    from physics import thermal as th
+    pv = prm.get('pvt') or {}; api = _f(prm, 'api', 35.0); sg = _f(prm, 'gas_sg', 0.75); gor = _f(prm, 'gor_sm3sm3', 100.0)
+    stream = th.Stream(q, wc, gor, api, sg, gas_cp_override=prm.get('gas_cp_jkgk'), co2=_f(pv, 'co2', 0.0), h2s=_f(pv, 'h2s', 0.0), n2=_f(pv, 'n2', 0.0))
+    spec = th.line_spec(prm, d_m); t = [float(t_in_c)]
+    for i in range(1, len(rows)):
+        a, b = rows[i - 1], rows[i]; dx = b['x_m'] - a['x_m']
+        if dx <= 0: t.append(t[-1]); continue
+        dz = (b.get('z_m') or 0.0) - (a.get('z_m') or 0.0); dp = (b['pressure_bar'] or 0.0) - (a['pressure_bar'] or 0.0)
+        t.append(th.advance_segment(t[-1], dx, dz, dp, spec['d_out'], spec['u'], spec['t_amb'], stream, max(0.5 * (a['pressure_bar'] + b['pressure_bar']), 1.0), None, 800.0, spec['jt'], spec['elev']))
+    return t
+
+
 # ----------------------------------------------------------------------------- single line
 def assess_line(e, q, p_up, info=None, ph=None, cfg=None, name=None):
     """Assess one flowline. ``q`` liquid rate [m3/d] (sign = flow direction), ``p_up`` pressure [bara] at the
@@ -188,9 +202,13 @@ def assess_line(e, q, p_up, info=None, ph=None, cfg=None, name=None):
         wc = ph['water'] / (ph['oil'] + ph['water']); water = ph['water']
     if water is None:
         water = wc * abs(q)
-    t_in = cfg.inlet_temperature_c.get(e['id'], _f(prm, 'temperature_c', 50.0))
+    t_net = ((((info or {}).get('thermal') or {}).get('edge') or {}).get(e['id']) or {}).get('t_in')   # network thermal pass (wells -> flowlines)
+    t_in = cfg.inlet_temperature_c.get(e['id'], t_net if t_net is not None else _f(prm, 'temperature_c', 50.0))
     t_amb = _f(prm, 'ambient_temperature_c', cfg.ambient_temperature_c); u = _f(prm, 'overall_u_w_m2k', cfg.overall_u_w_m2k)
-    temps = temperature_profile(prof, t_in, t_amb, u, D, cfg.fluid_cp_j_kgk)
+    from physics import thermal as _th
+    if _th.mode(prm) == 'heat_loss':   # energy balance: mixture cp, Joule-Thomson, elevation
+        temps = thermal_energy_profile(prof, t_in, prm, D, q, wc, ph)
+    else: temps = temperature_profile(prof, t_in, t_amb, u, D, cfg.fluid_cp_j_kgk)
     C = _f(prm, 'erosion_c_factor', cfg.erosion_c_factor)
     method = prm.get('hydrate_method', cfg.hydrate_method)
     inh = prm.get('inhibitor', cfg.inhibitor)

@@ -2,6 +2,42 @@
 
 Version history and major releases. See [AUDIT_V30.md](AUDIT_V30.md) for detailed v30 findings.
 
+## v32.4 — Fluid & PVT, calibration, CO2 / H2S, temperature model
+
+**Release Date:** 2026-10-04
+
+### New (Reservoir & wells → Fluid & PVT) - see PVT_THERMAL.md
+- **Correlation PVT** (`physics/pvt_model.py`): Standing / Vasquez-Beggs / Glaso / Petrosky-Farshad (Pb, Rs, Bo), Beggs-Robinson / Glaso / Egbogah / Beal viscosity, DAK / Hall-Yarborough / Papay Z, Lee-Gonzalez-Eakin gas viscosity, McCain water with salinity. Opt-in per element (`params['pvt']`); default behaviour unchanged.
+- **CO2 / H2S / N2** in the gas: pseudo-criticals (Kay + Wichert-Aziz), Z, viscosity, density and bubble point (Standing factors).
+- **Calibration to lab data**: fit Pb, Rs shape, Bo, undersaturated compressibility, viscosity, Z, gas viscosity; before / after error table, overlay plots, **correlation ranking**, apply to selected elements, download.
+- **Temperature model**: Ramey wellbore profile (wellhead T follows the rate), flowline / riser energy balance (heat loss, Joule-Thomson, elevation, mixture cp), choke JT, network temperature propagation and mixing with hydraulic feedback; flow-assurance profile uses it.
+- **Gas-quality screening**: pCO2, pH2S, de Waard-Milliams corrosion rate, sour-service flag.
+
+### Fixed
+- The legacy PVT ignored the element's GOR (fixed Pb 150 bar / Rsb 120): free gas appeared at the wrong pressure. The correlation model ties Rsb to the GOR (or the lab Rsb). Legacy kept as default for backward compatibility.
+- Wells now report `wellhead_temperature_c`.
+
+### Tests
+31 new tests (`tests/test_pvt_model.py`, `tests/test_thermal.py`, `tests/test_gas_quality.py`, app smoke).
+
+## v32.3 — Cases: save, duplicate, compare, export, password sharing
+
+**Release Date:** 2026-10-04
+
+### New (tab **📁 Cases**)
+- **Case library** (`network/case_manager.py`, `ui/cases_view.py`): a case = model on screen (nodes, edges, units) + its solve summary + forecast profile/KPIs. *Save* overwrites a case, *Save as new case*, *Load into editor*, *Duplicate* (keeps parent link, optionally the results), *Copy model / results from one case into another*, rename (unique names), description, delete. Shows whether the model on screen has unsaved changes.
+- **Compare** two or more cases against a baseline: solve KPIs and forecast KPIs with Δ columns, oil-rate and cumulative-oil overlays, and a parameter-level model diff (element, field, A, B). Buttons *Solve selected cases* / *Run forecast for selected cases* (progress bar, turn green) compute results without touching the editor. Comparison downloadable as CSV.
+- **Export / import** one, several or all cases as JSON or as ZIP (one file per case + SHA-256 manifest; a modified file is rejected).
+- **Password sharing** (`network/case_share.py`): AES-256-GCM, key from scrypt, header authenticated. Output is a `.fncase` file and a copy-paste *share link* (`fieldnet-share:...`). Wrong password or any modification is rejected. Requires `cryptography` (added to requirements.txt).
+
+### Limits
+- There is no server: a *link* contains the data itself (long; practical for small/medium cases), it is not a pointer. Shared copies cannot be revoked and edits are not synchronised between colleagues - each person imports a copy. Live co-editing needs a shared backend (see ARCHITECTURE.md).
+- The case library lives in the browser session; export to keep it.
+- A loaded case does not restore its forecast into the Prognosis tab (stored for comparison only); re-run to browse element results.
+
+### Tests
+13 new tests (`tests/test_cases.py`, 2 in `tests/test_app_smoke.py`). Suite: 1299 passed.
+
 ## v32.2 — Simpler app, progress everywhere, prediction sources, uncertainty builder
 
 **Release Date:** 2026-10-04
