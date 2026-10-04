@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import pandas as pd
 
 
-class Rerun(Exception): pass
+class Rerun(BaseException): pass   # like Streamlit's RerunException
 
 
 class _State(dict):
@@ -40,7 +40,10 @@ class DG:
     @property
     def sidebar(self): return DG(self.root)
     # ---- widgets
-    def button(self, label, key=None, **kw): self._log('button', label); return key in self.root.pressed or label in self.root.pressed
+    def button(self, label, key=None, **kw):
+        self._log('button', label); hit = key if key in self.root.pressed else (label if label in self.root.pressed else None)
+        if hit is None: return False
+        self.root.pressed.discard(hit); return True   # a real click is consumed by the run that sees it
     def download_button(self, label, *a, **kw): self._log('download_button', label); return False
     def checkbox(self, label, value=False, key=None, **kw): return bool(self._store(key, value))
     toggle = checkbox
@@ -88,5 +91,5 @@ def run_app(path, state=None, pressed=(), max_reruns=6, plotly=True):
         try:
             for k in [m for m in sys.modules if m == 'ui.charts']: del sys.modules[k]
             runpy.run_path(path, run_name='__main__'); return root
-        except Rerun: root.pressed = set()
+        except Rerun: pass
     return root

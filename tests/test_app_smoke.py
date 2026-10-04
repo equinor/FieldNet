@@ -21,3 +21,30 @@ def test_app_solves_forecasts_and_selects_each_kind():
     for ed in e[:3]:
         run_app(APP, {'nodes': [dict(x) for x in n], 'edges': [dict(x) for x in e], 'selected': ed['id'], 'prop_pick': ed['id']})
     assert len(kinds_done) >= 8
+
+
+def test_forecast_run_pause_continue_stop_flow():
+    from network.examples import demo_field_case
+    n, e = demo_field_case()
+    base = {'nodes': n, 'edges': e, 'fc_years': 1.0, 'fc_step': 90}
+    root = run_app(APP, dict(base), pressed={'fc_run'})
+    ctl = root.session_state.get('fc_ctl'); assert ctl is not None and ctl.status == 'done'
+    assert root.session_state.forecast['field']
+    # pause: start a run, advance one event, press Pause on the rerun, then Continue, then Stop
+    from network.run_control import RunController
+    from network.forecast import iter_forecast
+    c = RunController(iter_forecast(n, e, '2026-01-01', 1.0, 90)); c.advance(3)
+    st2 = dict(base, fc_ctl=c, fc_ctl_hash=None)
+    root = run_app(APP, st2, pressed={'fc_pause'}); assert root.session_state['fc_ctl'].status == 'paused'
+    root = run_app(APP, dict(root.session_state), pressed={'fc_stop'}); assert root.session_state['fc_ctl'].status == 'stopped'
+
+
+def test_advanced_panels_run_with_solved_demo_and_forecast():
+    from network.examples import demo_field_case
+    from network.forecast import run_forecast
+    n, e = demo_field_case(); fc = run_forecast(n, e, '2026-01-01', 1.0, 90)
+    pressed = {'solve_btn_top', 'adv_cal_syn', 'adv_lg_run', 'adv_ba_run', 'adv_ba_sched', 'adv_sens_run', 'adv_rel_run', 'adv_sim_vfp'}
+    root = run_app(APP, {'nodes': n, 'edges': e, 'forecast': fc}, pressed=pressed)
+    s = root.session_state
+    assert s.get('adv_sens') and s.get('adv_rel') and s.get('adv_vfp'), [k for k in s if k.startswith('adv')]
+    errs = [c for c in root.calls if c[0] == 'error']; assert not errs, errs

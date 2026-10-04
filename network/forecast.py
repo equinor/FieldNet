@@ -57,9 +57,17 @@ def _step_rates(nn, details, info, tanks):
     return wells, per_tank, winj
 
 
-def run_forecast(nodes, edges, start_date, years=5, step_days=30, events=None, depletion=None, enforce_constraints=False,
-                 max_tank_dp_bar=None, max_substeps=24, step_solver=None):
-    """Quasi-steady life-of-field forecast.
+def iter_forecast(nodes, edges, start_date, years=5, step_days=30, events=None, depletion=None, enforce_constraints=False,
+                  max_tank_dp_bar=None, max_substeps=24, step_solver=None, store_elements=True):
+    """Generator version of :func:`run_forecast` so a UI can show progress, pause, resume or stop.
+
+    Yields event dicts ``{'type': 'stage'|'step'|'done', 'stage', 'step', 'n_steps', 'date', 'day', 'horizon_days', 'substep',
+    'elapsed_s', 'eta_s', 'result'}``. ``'stage'`` events precede each network solve / depletion, ``'step'`` events follow each
+    completed timestep and carry a snapshot ``result`` of everything computed so far, ``'done'`` carries the final result.
+    Nothing is computed between ``next()`` calls, so pausing = not calling ``next`` and stopping = dropping the generator
+    (the last snapshot is a valid partial forecast).
+
+    Quasi-steady life-of-field forecast.
 
     Each timestep: apply schedule events -> give linked wells their tank pressure ->
     solve the network (warm-started) -> deplete tanks by material balance (in-place volume
@@ -80,6 +88,19 @@ def run_forecast(nodes, edges, start_date, years=5, step_days=30, events=None, d
     cum={'oil':0.0,'gas':0.0,'wat':0.0,'winj':0.0}
     horizon_days=max(int(round(years*DAYS_PER_YEAR)),0)
     t0=datetime.fromisoformat(str(start_date))
+    import time as _time
+    _tstart=_time.perf_counter(); n_steps=int(horizon_days//max(step_days,1))+1
+
+    def _result():
+        return {'field':list(rows),'wells':list(well_rows),'constraints':list(constraint_rows),'tanks':list(tank_rows),'nodes':list(node_rows),'edges':list(edge_rows),
+                'final_state':state,'recovery':[tk.row() for tk in tanks.values()]}
+
+    def _event(kind, stage, date, substep=0, with_result=False):
+        done=len(rows); el=_time.perf_counter()-_tstart
+        ev={'type':kind,'stage':stage,'step':done,'n_steps':n_steps,'date':date,'day':t,'horizon_days':horizon_days,'substep':substep,
+            'elapsed_s':el,'eta_s':(el/done*(n_steps-done)) if done else None}
+        if with_result: ev['result']=_result()
+        return ev
 
     last_pq={}
     def solve_now(nn0, date=None):
@@ -104,6 +125,7 @@ def run_forecast(nodes, edges, start_date, years=5, step_days=30, events=None, d
         dt_days=min(step_days, max(horizon_days-t, 0))
         date=(t0+timedelta(days=t)).date().isoformat()
         nn0,ee=apply_events(base,edges,events,date)
+        yield _event('stage','Solving network at '+date,date)
         try: nn,info,details=solve_now(nn0,date)
         except Exception as exc:
             rows.append({'Date':date,'Day':t,'Total liquid [m3/d]':0.0,'Oil [m3/d]':0.0,'Water [m3/d]':0.0,'Gas [Sm3/d]':0.0,'Water injection [m3/d]':0.0,'Cumulative liquid [m3]':sum(s['cum_liq'] for s in state.values()),'Cumulative oil [Sm3]':cum['oil'],'Cumulative gas [Sm3]':cum['gas'],'Cumulative water [m3]':cum['wat'],'Wells flowing':0,'Violations':0,'Converged':False,'Message':str(exc)})
@@ -143,6 +165,7 @@ def run_forecast(nodes, edges, start_date, years=5, step_days=30, events=None, d
             vol['winj']+=winj*sub
             rem-=sub; nsub+=1
             if rem<=1e-9: break
+            yield _event('stage','Depletion substep %d: re-solving network (%.0f d left in step)'%(nsub+1,rem),date,nsub)
             try: nn,info,details=solve_now(nn0,date); converged=converged and bool(info.get('success'))
             except Exception: converged=False; break
         if dt_days>0:
@@ -158,9 +181,11 @@ def run_forecast(nodes, edges, start_date, years=5, step_days=30, events=None, d
             well_rows.append({'Date':date,'Well':n['name'],'Well ID':n['id'],'Tank':tanks[rid].name if rid in tanks else '—','Status':dd.get('status'),'Liquid [m3/d]':w['liq'],'Oil [m3/d]':w['oil'],'Water [m3/d]':w['wat'],'Gas [Sm3/d]':w['gas'],'Reservoir pressure [bar]':float(prm.get('reservoir_pressure_bar',0.0)),'WHP [bar]':dd['whp_bar'],'BHP [bar]':dd['bhp_bar'],'Cumulative liquid [m3]':state[n['id']]['cum_liq'],'Cumulative oil [Sm3]':state[n['id']]['cum_oil']})
         for tid,tk in tanks.items(): tank_rows.append({'Date':date,**tk.row()})
         try:
+            if not store_elements: raise StopIteration
             from network.element_results import element_rows
             nr,er=element_rows(first_nn,ee,first_pq[0],first_pq[1],first_details,first_info,date)
             node_rows.extend(nr); edge_rows.extend(er)
+        except StopIteration: pass
         except ImportError:
             names={x['id']:x.get('name',x['id']) for x in first_nn}
             node_rows.extend({'Date':date,'Node ID':k,'Name':names.get(k,k),'Pressure [bar]':v} for k,v in first_pq[0].items())
@@ -173,7 +198,20 @@ def run_forecast(nodes, edges, start_date, years=5, step_days=30, events=None, d
              'Wells flowing':int(flowing),'Substeps':nsub,'Violations':first_info.get('violations',0),'Converged':converged,'Message':first_info.get('message','')}
         for tk in tanks.values(): row[f"P {tk.name} [bar]"]=tk.p
         rows.append(row)
+        yield _event('step','Completed '+date,date,nsub,with_result=True)
         if dt_days<=0: break
         t+=dt_days
-    return {'field':rows,'wells':well_rows,'constraints':constraint_rows,'tanks':tank_rows,'nodes':node_rows,'edges':edge_rows,'final_state':state,
-            'recovery':[tk.row() for tk in tanks.values()]}
+    yield _event('done','Finished',date if rows else start_date,with_result=True)
+
+
+def run_forecast(nodes, edges, start_date, years=5, step_days=30, events=None, depletion=None, enforce_constraints=False,
+                 max_tank_dp_bar=None, max_substeps=24, step_solver=None, progress=None, store_elements=True):
+    """Run :func:`iter_forecast` to completion. ``progress(event)`` is called for every event; returning ``False`` stops the
+    run early and returns the partial result with ``['stopped']=True``."""
+    last=None
+    for ev in iter_forecast(nodes,edges,start_date,years,step_days,events,depletion,enforce_constraints,max_tank_dp_bar,max_substeps,step_solver,store_elements):
+        if ev.get('result') is not None: last=ev['result']
+        if progress is not None and progress(ev) is False:
+            last=dict(last or {}); last['stopped']=True; return last
+        if ev['type']=='done': return ev['result']
+    return last

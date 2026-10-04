@@ -1,7 +1,8 @@
 """Production forecast (life-of-field) view."""
 from __future__ import annotations
 import pandas as pd
-from network.forecast import run_forecast
+from network.forecast import run_forecast, iter_forecast
+from network.run_control import RunController
 from network.field_development import _coerce_value
 from network.prognosis import forecast_kpis
 from ui import charts
@@ -56,6 +57,36 @@ def profile_charts(st, fc, key=''):
         st.plotly_chart(charts.stacked_area(wdf, 'Date', 'Oil [m3/d]', 'Well', 'Oil rate by well', 'Sm³/d'), use_container_width=True, key=f'fc_wells{key}')
 
 
+def _drive_run(st, nodes, edges):
+    """Progress bar + Pause / Continue / Stop controls for a running forecast (GAP-style). The partial snapshot is published
+    after every timestep, so the charts below always show what has been computed so far."""
+    ctl = st.session_state.get('fc_ctl')
+    if ctl is None: return
+    if ctl.active:
+        b1, b2, b3 = st.columns([1, 1, 4])
+        if ctl.status == ctl.RUNNING:
+            if b1.button('⏸ Pause', key='fc_pause', use_container_width=True): ctl.pause()
+        elif b1.button('▶ Continue', key='fc_continue', type='primary', use_container_width=True): ctl.resume()
+        if b2.button('⏹ Stop', key='fc_stop', use_container_width=True): ctl.stop()
+    bar = st.progress(ctl.fraction); msg = st.empty()
+    if ctl.status == ctl.RUNNING:
+        msg.caption('⏳ ' + ctl.describe() + '  — Pause to inspect results, Stop to keep what is computed.')
+        while ctl.status == ctl.RUNNING:
+            ev = ctl.advance(max_events=1)
+            if ctl.snapshot is not None:
+                st.session_state.forecast = ctl.snapshot; st.session_state.forecast_hash = st.session_state.get('fc_ctl_hash')
+            bar.progress(ctl.fraction); msg.caption('⏳ ' + ctl.describe() + '  — Pause to inspect results, Stop to keep what is computed.')
+        if ctl.status == ctl.FAILED: st.error(f'Forecast failed: {ctl.error}')
+    if ctl.snapshot is not None:
+        st.session_state.forecast = ctl.snapshot; st.session_state.forecast_hash = st.session_state.get('fc_ctl_hash')
+    n = len((ctl.snapshot or {}).get('field', []))
+    if ctl.status == ctl.PAUSED: msg.info(f'⏸ Paused after {n} timestep(s) ({ctl.fraction:.0%}). Results below are partial — press Continue to resume from here.')
+    elif ctl.status == ctl.STOPPED: msg.warning(f'⏹ Stopped by user after {n} timestep(s) ({ctl.fraction:.0%}). Results below are partial (forecast stops at the last completed step).')
+    elif ctl.status == ctl.DONE: msg.success(f'Forecast complete: {n} timesteps in {ctl.t_run:.1f} s.')
+    if ctl.status in (ctl.PAUSED, ctl.STOPPED) and st.session_state.get('fc_ctl_hash') != graph_hash(nodes, edges):
+        st.warning('The model was edited after this run started; Continue resumes with the model as it was when the run started.')
+
+
 def render_forecast(st, nodes, edges):
     st.subheader('Production forecast')
     st.caption('Quasi-steady life-of-field prognosis: every step re-solves the full network with tank pressures from material balance (in-place volume, fluid phase, aquifer and injection support). Screening model, not a reservoir simulator.')
@@ -84,17 +115,19 @@ def render_forecast(st, nodes, edges):
         with st.expander('Schedule events (optional)'):
             st.caption('Shut in or start up wells, change rate limits, separator pressure, flowline diameter ... Pick the event, the element and the date; values use your unit profile. The same schedule is used by the Development schedule and Scenarios tabs.')
             sched = render_event_builder(st, nodes, edges, None, st.session_state.get('unit_profile', 'norwegian_si'), key_prefix='evb_fc', start_date=start)
+        store_el = st.toggle('Store per-element profiles (slower, needed by the Element results tab)', value=True, key='fc_store_el')
         run = st.button('▶ Run forecast', type='primary', use_container_width=True, key='fc_run')
     if run:
         ids = {str(x.get('id')) for x in [*nodes, *edges]}
         bad = [f'unknown target {e.target_id!r}' for e in sched if str(e.target_id) not in ids]
         events = [e for e in events_to_forecast(sched) if e['target_id'] in ids]
         if bad: st.error('Ignored events: ' + ', '.join(bad))
-        with st.spinner('Forecasting: re-solving the network at every step...'):
-            try:
-                st.session_state.forecast = run_forecast(nodes, edges, start, float(years), int(step), events, dep, enforce_constraints=bool(caps), step_solver=_step_solver(st))
-                st.session_state.forecast_hash = graph_hash(nodes, edges)
-            except Exception as exc: st.error(f'Forecast failed: {exc}')
+        old = st.session_state.get('fc_ctl')
+        if old is not None and old.active: old.stop()
+        st.session_state.fc_ctl = RunController(iter_forecast(nodes, edges, start, float(years), int(step), events, dep, enforce_constraints=bool(caps),
+                                                              step_solver=_step_solver(st), store_elements=bool(store_el)))
+        st.session_state.fc_ctl_hash = graph_hash(nodes, edges)
+    _drive_run(st, nodes, edges)
     fc = st.session_state.get('forecast')
     if not (fc and fc.get('field')):
         st.info('Set the horizon and press **Run forecast**.'); return

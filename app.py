@@ -61,6 +61,7 @@ from ui.theme import THEMES, apply_theme
 from solver.diagnostics import solver_diagnostics
 from physics.well_model import well_settings
 from ui.forecast_view import render_forecast
+from ui.advanced_view import render_advanced
 from ui.development_view import render_schedule, render_scenarios
 from ui.constraints_view import render_constraint_editor
 from ui import charts
@@ -170,13 +171,14 @@ with st.sidebar:
     st.caption('Connect components in the editor: drag from an OUT port onto another component’s IN port.')
     if st.button('Load demo field',use_container_width=True): st.session_state.nodes,st.session_state.edges=demo_field_case(); reset_solve(); [st.session_state.pop(k,None) for k in ('forecast','sched_result','scn_results','wc_result')]; st.rerun()
 
-G=st.tabs(['🗺️ Network','🛢️ Wells & reservoirs','📊 Network results','📈 Forecast & development','⚙️ Optimization','🎲 Uncertainty & risk','🗂️ Data & QA'])
+G=st.tabs(['🗺️ Network','🛢️ Wells & reservoirs','📊 Network results','📈 Forecast & development','⚙️ Optimization','🎲 Uncertainty & risk','🗂️ Data & QA','🧪 Advanced'])
 tab_net=G[0]
 with G[1]: tab_nodal,tab_tanks=st.tabs(['Nodal analysis','Reservoir tanks'])
 with G[2]: tab_results,tab_constraints,tab_diag,tab_fa,tab_elem=st.tabs(['Summary','Constraints & equipment','Hydraulic profiles','Flow assurance','Element results'])
 with G[3]: tab_forecast,tab_dev26,tab_development,tab_res25=st.tabs(['Production forecast','Development schedule','Scenarios & well count','Multi-tank coupling (advanced)'])
 with G[4]: tab_ops,tab_comp,tab_cal=st.tabs(['Optimization & sensitivity','Compressor speed','Calibration'])
 with G[5]: tab_uncertainty,tab_rel=st.tabs(['Monte Carlo','Reliability'])
+with G[7]: tab_adv=st.container()
 with G[6]: tab_qa28,tab_io27,tab_scen29=st.tabs(['Model assurance','Import / export','Snapshots'])
 with tab_net:
     canvas,props=st.columns([3.2,1])
@@ -385,6 +387,9 @@ with tab_net:
         g3.metric('Flowing wells',f"{sum(1 for v in _d.values() if v['liquid_rate_m3d']>1e-6)}/{len(_d)}"); g4.metric('Constraint violations',_i.get('violations',0))
         for a in _i.get('constraint_actions',[])[-5:]: st.info(a['message'])
         for w in _i.get('well_warnings',[]): st.warning(w['message'])
+
+with tab_adv:
+    render_advanced(st,solver_input(st.session_state.nodes,st.session_state.edges)[0],st.session_state.edges,solved())
 
 with tab_elem:
     st.subheader('Element results & profiles')

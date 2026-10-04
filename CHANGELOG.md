@@ -2,6 +2,24 @@
 
 Version history and major releases. See [AUDIT_V30.md](AUDIT_V30.md) for detailed v30 findings.
 
+## v32.1 — Forecast speed + run control, Advanced tab
+
+**Release Date:** 2026-10-04
+
+### Forecast
+- **~3x faster forecast** (demo, 3 yr: 3.5 s -> 1.0 s): `physics.well_model.solve_well_rate` now scans from the highest rate and stops at the first stable root and refines it with Brent's method instead of evaluating the whole 25-point grid plus bisection (same operating point to solver tolerance). Optional *Store per-element profiles* toggle saves a further ~25 %.
+- **Progress, pause/continue, stop** (`network/run_control.py`, `network.forecast.iter_forecast`): the forecast is a generator with stage events (solving network at date, depletion substep, step completed), a progress bar with elapsed time and ETA, a Pause/Continue button and a Stop button. Partial results (charts, KPIs, tables) are published after every step, so you can inspect them while paused; Stop keeps everything computed so far. A paused-then-resumed run gives bit-identical results to an uninterrupted run (tested).
+- `run_forecast(..., progress=cb)` accepts a callback; return `False` to stop.
+
+### Advanced tab (new, screening-level)
+Well-test calibration (PI + friction multipliers), lift-gas supply limit, pump/compressor curve import and operating-point checks, fluid blending at junctions, flow assurance along the profile (hydrate, wax, erosion, terrain slugging), back-allocation and well-test scheduling, tornado sensitivity, reliability-weighted P10/P50/P90, simulator file link (VFPPROD export, rate import/export), correlation benchmark.
+
+### Honest limits
+- Correlations: **still not validated against published data**; see `docs_correlation_validation.md` (consistency checks only).
+- VFPPROD output not loaded into Eclipse; no live simulator coupling.
+- Pause/Stop act between timesteps/substeps (a single network solve cannot be interrupted).
+- Pause relies on Streamlit script reruns; verified with a fake Streamlit only.
+
 ## v32 — Inline equipment, constraint registry, tank communication, compute layer
 
 **Release Date:** 2026-10-04
