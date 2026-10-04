@@ -9,9 +9,9 @@ def render_compute_settings(st, nodes=None, edges=None, key='cmp', honour=None):
     from optimization.objectives import PRESETS, GUIDE_FORMULA_PRESETS, GUIDE_MODES, WELL_NAMES, TOTAL_NAMES, DEFAULT_PRICES
     from network.parallel_solve import cpu_count, compute_plan
     cur = dict(st.session_state.get('compute') or {}); cur.setdefault('optimizer', {}); o = dict(cur['optimizer'])
-    with st.expander('Solve options · constraints · optimiser · parallel', expanded=False):
+    o['enabled'] = synced_checkbox(st, '⚡ Optimise while solving (maximise the objective, honouring all constraints)', bool(o.get('enabled', False)), key + '_opt')
+    with st.expander('Objective · guide rates · parallel · constraints', expanded=bool(o['enabled'])):
         cur['honour'] = synced_checkbox(st, 'Honour constraints', bool(cur.get('honour', True)), key + '_honour') if honour is None else bool(honour)
-        o['enabled'] = synced_checkbox(st, 'Optimise well controls to the objective (honours all constraints)', bool(o.get('enabled', False)), key + '_opt')
         if o['enabled']:
             obj = dict(o.get('objective') or {'preset': 'max_oil'}); presets = list(PRESETS) + ['custom']
             obj['preset'] = synced_select(st, 'Objective', presets, obj.get('preset', 'max_oil') if obj.get('preset', 'max_oil') in presets else 'max_oil', key + '_obj',

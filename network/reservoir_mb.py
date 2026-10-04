@@ -80,6 +80,11 @@ class Tank:
         # Communication with other tanks (canvas: tank -> tank link). xin = cumulative net reservoir volume received [m3].
         self.xin = 0.0
         self.comm = [c for c in (p.get('communication') or []) if isinstance(c, dict) and c.get('to')]
+        # Prediction mode (GAP style): 'material_balance' (default) or 'external' = pressure (and optional water cut / GOR) follow a table
+        # exported from a reservoir simulator instead of the tank balance. The balance still tracks cumulatives and recovery factor.
+        self.mode = str(p.get('prediction_mode', 'material_balance') or 'material_balance').lower()
+        self.ext = list(p.get('external_table') or []) if self.mode == 'external' else []
+        self.ext_wc = self.ext_gor = None
         # Optional relative-permeability model (oil tanks only). ``sw_avg`` is the tank-average water saturation.
         self.rp = None; self.sw_avg = self.swi
         self.sweep = min(max(_f(p, 'sweep_efficiency'), 0.05), 1.0)
@@ -119,8 +124,42 @@ class Tank:
             self.cgr = max(_f(p, 'cgr_sm3_per_msm3'), 0.0) if self.phase == 'gas_condensate' else 0.0
             self.n = self.g * self.cgr / 1e6
 
+    # ---- external (simulator) prediction --------------------------------------------
+    def apply_external(self, day, t0=None):
+        """Set pressure (and optional water cut / GOR) from the external table at ``day`` days after the forecast start ``t0`` (ISO date / datetime).
+        Rows: ``{'date' | 'time_days', 'reservoir_pressure_bar', 'water_cut'?, 'gor_sm3sm3'?}``. Linear interpolation, held flat outside the table.
+        Returns True when the table was applied."""
+        if self.mode != 'external' or not self.ext: return False
+        import numpy as _np
+        from datetime import datetime as _dt
+        t0d = _dt.fromisoformat(str(t0)[:10]) if t0 is not None else None
+        xs = []; rows = []
+        for r in self.ext:
+            try:
+                if r.get('time_days') is not None and str(r.get('time_days')) != '': x = float(r['time_days'])
+                elif r.get('date') and t0d is not None: x = (_dt.fromisoformat(str(r['date'])[:10]) - t0d).days
+                else: continue
+            except (TypeError, ValueError): continue
+            xs.append(x); rows.append(r)
+        if not xs: return False
+        order = _np.argsort(xs); xs = _np.asarray(xs)[order]; rows = [rows[i] for i in order]
+        def col(k):
+            pts = [(x, float(r[k])) for x, r in zip(xs, rows) if r.get(k) is not None and str(r.get(k)) not in ('', 'nan')]
+            if not pts: return None
+            return float(_np.interp(float(day), [a for a, _ in pts], [b for _, b in pts]))
+        pr = col('reservoir_pressure_bar')
+        if pr is not None: self.p = max(pr, 1.0)
+        self.ext_wc = col('water_cut'); self.ext_gor = col('gor_sm3sm3')
+        return True
+
     # ---- fluid the tank delivers to its wells --------------------------------------
     def well_overrides(self, well_params=None):
+        o = self._well_overrides_mb(well_params)
+        if self.ext_wc is not None: o['water_cut'] = min(max(self.ext_wc, 0.0), 0.99)
+        if self.ext_gor is not None and self.phase == 'oil': o['gor_sm3sm3'] = max(self.ext_gor, 0.0)
+        return o
+
+    def _well_overrides_mb(self, well_params=None):
         o = {'reservoir_pressure_bar': self.p}
         wp = well_params or {}
         if self.phase == 'oil':

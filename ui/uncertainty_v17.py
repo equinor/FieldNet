@@ -7,6 +7,9 @@ from network.field_development import DevelopmentScenario
 from network.uncertainty import UncertainParameter, MonteCarloConfig, run_monte_carlo, default_workers
 from network import risk_profiles as rp
 from ui.widgets import clean_num, clean_text
+from ui.run_button import run_button
+from ui.graph_contract import graph_hash
+from network.uncertainty_catalog import target_options, parameters_for, make_parameter, DISTRIBUTIONS
 
 PARAM_COLS=['name','target_id','path','operation','distribution','low','mode','high','mean','std','physical_min','physical_max','bound_policy']
 def parse_uncertainty_rows(rows):
@@ -70,6 +73,48 @@ def _render_profiles(st,r):
     d2.download_button('Download profiles CSV (wide)',export_profiles_csv(r,wide=True),'fieldnet_profiles_wide.csv','text/csv',use_container_width=True)
     d3.download_button('Download profiles JSON',export_profiles_json(r),'fieldnet_profiles.json','application/json',use_container_width=True)
 
+def _param_builder(st,nodes,edges):
+    """Drop-down uncertainty builder: What -> Which parameter -> How uncertain -> Add. Returns the list of parameter rows (PARAM_COLS schema)."""
+    ss=st.session_state
+    if 'mc_params' not in ss:
+        w=next((n for n in nodes if n.get('kind')=='well'),None); ps=parameters_for(nodes,edges,'kind:well') if sum(1 for n in nodes if n.get('kind')=='well')>1 else (parameters_for(nodes,edges,w['id']) if w else [])
+        spec=next((p for p in ps if p['label'].startswith('Productivity')),None)
+        ss.mc_params=[make_parameter('kind:well' if sum(1 for n in nodes if n.get('kind')=='well')>1 else w['id'],'All wells' if sum(1 for n in nodes if n.get('kind')=='well')>1 else w.get('name',w['id']),spec,spec['low'],spec['mode'],spec['high'])] if (spec and w) else []
+    rows=ss.mc_params
+    valid={r['target_id'] for r in rows}; known={t for t,_ in target_options(nodes,edges)}
+    st.markdown('#### What is uncertain?')
+    opts=target_options(nodes,edges)
+    if not opts: st.info('The model has no elements with uncertain parameters yet.'); return rows
+    labels=dict(opts)
+    c1,c2=st.columns(2)
+    tid=c1.selectbox('1 · Element or group',[t for t,_ in opts],format_func=labels.get,key='mcb_target')
+    specs=parameters_for(nodes,edges,tid)
+    sp=c2.selectbox('2 · Parameter',range(len(specs)),format_func=lambda i: specs[i]['label'],key='mcb_param_'+str(tid)) if specs else None
+    if sp is not None:
+        spec=specs[sp]; k='mcb_'+str(tid)+'_'+spec['path']
+        c3,c4=st.columns([1,2])
+        dist=c3.selectbox('3 · Shape',list(DISTRIBUTIONS),format_func=DISTRIBUTIONS.get,key=k+'_dist')
+        lo,hi=c4.slider('4 · Range as a factor of the current value  (1.00 = as in the model)',0.1,3.0,(float(spec['low']),float(spec['high'])),0.01,key=k+'_rng')
+        mode=1.0
+        if dist=='triangular': mode=st.slider('Most likely factor',float(lo),float(hi),min(max(1.0,float(lo)),float(hi)),0.01,key=k+'_mode')
+        elif dist in ('normal','lognormal'): mode=min(max(1.0,float(lo)),float(hi))
+        if st.button('➕ Add this uncertainty',key=k+'_add',type='primary'):
+            try:
+                rows.append(make_parameter(tid,labels[tid],spec,lo,mode,hi,dist)); ss.mc_params=rows; st.rerun()
+            except ValueError as exc: st.error(str(exc))
+    st.markdown('#### Current uncertainties')
+    if not rows: st.caption('None yet — add at least one above.')
+    for i,r in enumerate(rows):
+        a,b,c=st.columns([5,3,1])
+        a.markdown(f"**{r['name']}**"); b.caption(f"{r['distribution']} · {r['low']:.2f} – {r['high']:.2f}"+(f" (likely {r['mode']:.2f})" if r['distribution']=='triangular' else ''))
+        if c.button('✖',key=f'mcb_del_{i}',help='Remove'): rows.pop(i); ss.mc_params=rows; st.rerun()
+    with st.expander('Advanced: edit the table directly'):
+        st.caption('Target IDs also accept groups: `kind:well`, `kind:reservoir`, `edges:pipeline`. Paths such as `params.pi_m3d_bar`; `multiply` = factor, `set` = absolute value.')
+        ed=st.data_editor(pd.DataFrame(rows,columns=PARAM_COLS),num_rows='dynamic',use_container_width=True,key='v17_params_adv_'+str(len(rows)))
+        if st.button('Apply table edits',key='mcb_apply_tbl'):
+            ss.mc_params=[{k:(None if (isinstance(v,float) and v!=v) else v) for k,v in r.items()} for r in ed.to_dict('records') if clean_text(r.get('name'))]; st.rerun()
+    return rows
+
 def render_uncertainty(st,nodes,edges):
     st.subheader('Uncertainty, Monte Carlo & Risk')
     st.caption('Planning-level probabilistic wrapper around the deterministic production engine. P90 is conservative and P10 optimistic for production/reserves-style metrics. Samples are reproducible from the displayed seed.')
@@ -77,19 +122,15 @@ def render_uncertainty(st,nodes,edges):
     start=c1.date_input('MC start date',key='v17_start').isoformat(); years=c2.number_input('MC horizon [years]',0.03,50.0,1.0,0.5,key='v17_years'); step=c3.selectbox('MC timestep [days]',[10,30,60,90],index=1,key='v17_step'); samples=c4.number_input('Samples',5,1000,50,5,key='v17_samples')
     c5,c6=st.columns(2); seed=c5.number_input('Random seed',0,2_147_483_647,1701,1,key='v17_seed'); method=c6.selectbox('Sampling',['lhs','random'],key='v17_method')
     c7,c8=st.columns(2); maxw=default_workers(); workers=c7.number_input('Compute workers',1,maxw,1,1,key='v17_workers',help='Parallel processes for realizations (results identical to serial). Upper bound = min(CPUs-1, 8).'); store=c8.checkbox('Store full profiles',True,key='v17_store_profiles',help='Keep each realization\'s system time series (float32, memory-capped) to build P90/P50/P10/Mean profiles.')
-    st.markdown('**Uncertain parameters**')
-    st.caption('Use a network target ID plus a nested path such as `params.pi_m3d_bar`, `params.water_cut`, `pressure_bar`, or an edge `params.max_rate_m3d`. `multiply` treats sampled values as factors; `set` uses absolute values.')
-    with st.expander('Network target IDs'):
-        st.dataframe(pd.DataFrame([{'ID':x.get('id'),'Name':x.get('name',x.get('id')),'Type':x.get('kind')} for x in [*nodes,*edges]]),hide_index=True,use_container_width=True)
-    default=pd.DataFrame([{'name':'PI multiplier','target_id':next((n.get('id') for n in nodes if n.get('kind')=='well'),''),'path':'params.pi_m3d_bar','operation':'multiply','distribution':'triangular','low':0.8,'mode':1.0,'high':1.2,'mean':1.0,'std':0.1,'physical_min':0.0,'physical_max':None,'bound_policy':'clip'}],columns=PARAM_COLS)
-    df=st.data_editor(default,num_rows='dynamic',use_container_width=True,key='v17_params')
-    if st.button('▶ Run v19 Monte Carlo',type='primary',use_container_width=True):
+    rows=_param_builder(st,nodes,edges)
+    df=pd.DataFrame(rows,columns=PARAM_COLS)
+    for rb in run_button(st,'▶ Run Monte Carlo',key='rb_mc',type='primary',model_hash=graph_hash(nodes,edges)):
         try:
             pars=parse_uncertainty_rows(df.to_dict('records')); cfg=MonteCarloConfig(samples=int(samples),seed=int(seed),method=method,parameters=pars); sc=DevelopmentScenario('Monte Carlo',start,float(years),int(step))
-            bar=st.progress(0.0,text='Running realizations...')
-            def prog(i,n): bar.progress(i/n,text=f'Running realization {i}/{n}')
-            st.session_state.v17_mc=run_monte_carlo(nodes,edges,sc,cfg,progress=prog,workers=int(workers),keep_series=bool(store)); bar.empty()
-        except Exception as exc: st.error(f'v19 uncertainty error: {exc}')
+            rb.progress(0.0,'Running realizations…')
+            def prog(i,n): rb.progress(i/n,f'Realization {i}/{n}')
+            st.session_state.v17_mc=run_monte_carlo(nodes,edges,sc,cfg,progress=prog,workers=int(workers),keep_series=bool(store))
+        except Exception as exc: rb.fail(f'Monte Carlo failed: {exc}')
     r=st.session_state.get('v17_mc')
     if not r: return
     a,b,c,d=st.columns(4); a.metric('Successful',r['successful_samples']); b.metric('Failed',r['failed_samples']); c.metric('Success rate',f"{100*r.get('success_fraction',0):.1f}%"); d.metric('Seed',r['seed'])
@@ -115,4 +156,4 @@ def render_uncertainty(st,nodes,edges):
         st.plotly_chart(px.histogram(good,x='cumulative_oil_m3',nbins=min(40,max(10,len(good)//3)),title='Cumulative oil uncertainty distribution'),use_container_width=True)
     if r.get('profiles'): _render_profiles(st,r)
     with st.expander('Realizations'): st.dataframe(runs,hide_index=True,use_container_width=True)
-    d1,d2=st.columns(2); d1.download_button('Download v19 Monte Carlo CSV',export_mc_csv(r),'fieldnet_v19_monte_carlo.csv','text/csv',use_container_width=True); d2.download_button('Download v19 Monte Carlo JSON',export_mc_json(r),'fieldnet_v19_monte_carlo.json','application/json',use_container_width=True)
+    d1,d2=st.columns(2); d1.download_button('Download Monte Carlo CSV',export_mc_csv(r),'fieldnet_monte_carlo.csv','text/csv',use_container_width=True); d2.download_button('Download Monte Carlo JSON',export_mc_json(r),'fieldnet_monte_carlo.json','application/json',use_container_width=True)

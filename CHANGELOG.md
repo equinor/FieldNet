@@ -2,6 +2,33 @@
 
 Version history and major releases. See [AUDIT_V30.md](AUDIT_V30.md) for detailed v30 findings.
 
+## v32.2 — Simpler app, progress everywhere, prediction sources, uncertainty builder
+
+**Release Date:** 2026-10-04
+
+### Fixed
+- **Crash in the relative-permeability / prediction-source editors** (`TypeError: argument of type 'function' is not a container or iterable`): a column was passed to a helper that reads the session state. `ui/widgets.py` now always reads the real session state; the test harness now behaves like Streamlit here (child containers have no `session_state`) and also detects duplicate widget ids.
+- Simulator CSV upload on a well stored a `(rows, warnings)` tuple as the table; now stores the rows and shows the warnings.
+
+### New
+- **Progress bar + green button** on every run button (`ui/run_button.py`): amber while running, green when finished (stays green until the model changes), red on failure. Solve button is green while the network is solved.
+- **Development schedule**: progress through both forecasts, and a *Browse the results* section: network diagram redrawn for any simulated date (pressures, well rates, flows; downloadable SVG), tables for that date, and any node / flowline over time with the date marked. Same browser under the Production forecast.
+- **Prediction source tab** (`ui/prediction_view.py`, `network/prediction_assign.py`): per tank *material balance* or *external simulator table* (pressure / water cut / GOR follow the table), per well *decline curve* (qi shared equally or by PI) or *simulator rates CSV*, or back to the tank balance. Overview table of the current setup.
+- **Monte Carlo uncertainty builder**: pick element or group, pick the parameter, shape and range from drop-downs / sliders, add; remove with ✖; groups (`All wells`) use one shared factor. Advanced table still available.
+- **Calibration tab** replaces Optimization: match measured pressures/rates, and match well tests (IPR / VLP).
+- **Optimise while solving** is now a checkbox next to Solve (one operation; the separate integrated optimiser was removed). Debottleneck and sensitivity moved to Tools.
+- **Bigger editor**: height slider (600-1600, default 1050), *Wide editor* toggle (full width, properties below), wider default column.
+- Forecast: **~3x faster** and Pause / Continue / Stop (see v32.1).
+
+### Simplified
+- 8 top-level tabs and 25 sub-tabs reduced to 7 tabs: Network · Reservoir & wells · Results · Prognosis · Calibration · Uncertainty · Tools. Version numbers removed from button labels and titles.
+
+### Honest limits
+- Green button colouring uses Streamlit's `st-key-<key>` class (Streamlit >= 1.39); older versions keep the normal colour but still show progress.
+- Progress is stage-level for single long calls (calibration, solve); per-step for forecast, scenarios, well count, Monte Carlo, tornado.
+- Tank external mode forces pressure from the table; the material balance still tracks cumulatives and RF but no longer drives pressure. A column with a single value is held flat.
+- Still verified only against a fake Streamlit + Chromium canvas tests, not a live Streamlit session.
+
 ## v32.1 — Forecast speed + run control, Advanced tab
 
 **Release Date:** 2026-10-04

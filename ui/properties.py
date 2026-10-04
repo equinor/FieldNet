@@ -253,7 +253,9 @@ def prediction_source_editor(st, node, start_date):
         else:
             up = st.file_uploader('Simulator export (CSV: date or time_days, plus pressure / PI / water cut / GOR / rate columns)', type=['csv', 'txt'], key='psup' + sid)
             if up is not None and st.button('Load table', key='psload' + sid):
-                try: src['rows'] = parse_external_csv(up.getvalue().decode('utf-8', 'ignore')); src.setdefault('x_axis', 'date')
+                try:
+                    src['rows'], _w = parse_external_csv(up.getvalue().decode('utf-8', 'ignore')); src.setdefault('x_axis', 'date')
+                    for _m in _w: st.caption('ℹ ' + str(_m))
                 except Exception as exc: st.error(str(exc))
             src['x_axis'] = synced_select(st, 'Table axis', ['date', 'time_days', 'cum_oil_sm3'], src.get('x_axis', 'date'), 'psax' + sid)
             src['interp'] = synced_select(st, 'Interpolation', ['linear', 'step'], src.get('interp', 'linear'), 'psin' + sid); src['extrapolate'] = synced_select(st, 'Beyond the table', ['hold', 'linear', 'none'], src.get('extrapolate', 'hold'), 'psex' + sid)

@@ -18,6 +18,9 @@ def _workers(st):
     try: return max(1, int((st.session_state.get('compute') or {}).get('workers', 1)))
     except (TypeError, ValueError): return 1
 from ui import charts
+from ui.run_button import start_run
+from ui.graph_contract import graph_hash
+from ui.results_browser import render_results_browser
 from ui.forecast_view import kpi_row, profile_charts, fmt, DEFAULT_START
 from ui.widgets import clean_num, clean_text
 from ui.schedule_builder import render_event_builder, events_to_forecast
@@ -64,8 +67,8 @@ def render_schedule(st, nodes, edges):
         e, f = st.columns(2)
         compare = e.toggle('Compare with all wells on stream at start', value=True, key='sch_cmp')
         caps = f.toggle('Honour facility capacities', value=True, key='sch_caps')
-        run = st.button('▶ Run development plan', type='primary', use_container_width=True, key='sch_run')
-    if run:
+        rb = start_run(st, '▶ Run development plan', key='sch_run', type='primary', model_hash=graph_hash(nodes, edges))
+    if rb:
         try:
             rows = sorted([r for r in df.to_dict('records') if bool(r.get('Include'))], key=lambda r: clean_num(r.get('Order'), 999))
             tasks = []
@@ -76,14 +79,18 @@ def render_schedule(st, nodes, edges):
             excluded = [r for r in df.to_dict('records') if not bool(r.get('Include'))]
             ns = [dict(n, params={**(n.get('params') or {}), 'available': False}) if any(n['id'] == r['ID'] for r in excluded) else n for n in nodes]
             user_events = events_to_forecast(sched_events)
-            with st.spinner('Scheduling and forecasting...'):
+            share = 0.5 if compare else 1.0
+            def _prog(offset, label):
+                return lambda ev: rb.progress(offset + share * ev['step'] / max(ev['n_steps'], 1), f"{label}: {ev['stage']}") and None
+            if True:
                 # forecast args: nodes, edges, start, years, step, events, depletion
                 res = run_development_plan(ns, edges, DevelopmentPlan('Development plan', start, float(years), int(step), tasks),
-                                           forecast_runner=lambda nn, ee, d0, yr, st_, evs, dep, *a: run_forecast(nn, ee, d0, yr, st_, [*(evs or []), *user_events], dep, *a, enforce_constraints=bool(caps), step_solver=_step_solver(st)))
+                                           forecast_runner=lambda nn, ee, d0, yr, st_, evs, dep, *a: run_forecast(nn, ee, d0, yr, st_, [*(evs or []), *user_events], dep, *a, enforce_constraints=bool(caps), step_solver=_step_solver(st), progress=_prog(0.0, 'Scheduled plan')))
                 st.session_state.sched_result = res
-                st.session_state.sched_base = run_forecast(ns, edges, start, float(years), int(step), user_events or None, None, enforce_constraints=bool(caps), step_solver=_step_solver(st)) if compare else None
+                st.session_state.sched_base = run_forecast(ns, edges, start, float(years), int(step), user_events or None, None, enforce_constraints=bool(caps), step_solver=_step_solver(st), progress=_prog(0.5, 'All wells at start')) if compare else None
         except Exception as exc:
-            st.error(f'Development plan failed: {exc}')
+            rb.fail(f'Development plan failed: {exc}')
+        rb.finish()
     res = st.session_state.get('sched_result')
     if not res:
         st.info('Adjust the drilling order and press **Run development plan**.'); return
@@ -109,6 +116,8 @@ def render_schedule(st, nodes, edges):
     b.plotly_chart(charts.lines(fdf, 'Date', ['Wells flowing'], 'Producers on stream', 'wells', colors={'Wells flowing': charts.CATEGORICAL[0]}), use_container_width=True, key='sch_wells')
     with st.expander('Full profile charts'):
         profile_charts(st, fc, key='_sch')
+    st.markdown('### Browse the results')
+    render_results_browser(st, nodes, edges, fc, key='sch_rb')
     with st.expander('Schedule table'):
         st.dataframe(sch, hide_index=True, use_container_width=True)
 
@@ -149,8 +158,8 @@ def render_scenarios(st, nodes, edges):
                                             'Separator pressure [bar]': st.column_config.NumberColumn(help='Blank = as in the model'),
                                             'Liquid capacity [Sm3/d]': st.column_config.NumberColumn(help='Blank = as in the model'),
                                             'Injection': st.column_config.CheckboxColumn()})
-        run = st.button('▶ Run scenarios', type='primary', use_container_width=True, key='scn_run')
-    if run:
+        rb = start_run(st, '▶ Run scenarios', key='scn_run', type='primary', model_hash=graph_hash(nodes, edges))
+    if rb:
         scs = []
         for r in sdf.to_dict('records'):
             name = clean_text(r.get('Scenario'))
@@ -159,11 +168,11 @@ def render_scenarios(st, nodes, edges):
                         'pi_mult': clean_num(r.get('PI ×')), 'separator_pressure_bar': clean_num(r.get('Separator pressure [bar]')),
                         'liquid_capacity_m3d': clean_num(r.get('Liquid capacity [Sm3/d]')), 'injection': bool(r.get('Injection')) if r.get('Injection') is not None else True,
                         'events': scn_events or None})
-        bar = st.progress(0.0, text='Running scenarios...')
+        rb.progress(0.02, 'Starting scenarios…')
         try:
-            st.session_state.scn_results = run_scenarios(nodes, edges, scs, start, float(years), int(step), bool(caps), step_solver=_step_solver(st), workers=_workers(st), progress=lambda i, n: bar.progress(i / n, text=f'Scenario {i}/{n}'))
-        except Exception as exc: st.error(f'Scenario run failed: {exc}')
-        bar.empty()
+            st.session_state.scn_results = run_scenarios(nodes, edges, scs, start, float(years), int(step), bool(caps), step_solver=_step_solver(st), workers=_workers(st), progress=lambda i, n: rb.progress(i / n, f'Scenario {i}/{n}'))
+        except Exception as exc: rb.fail(f'Scenario run failed: {exc}')
+        rb.finish()
     res = st.session_state.get('scn_results')
     if res:
         kt = _kpi_table(res)
@@ -187,15 +196,15 @@ def render_scenarios(st, nodes, edges):
     with st.container(border=True):
         order = st.multiselect('Producers in drilling priority', list(names), default=list(names), format_func=names.get, key='wc_order')
         thr = st.slider('Minimum extra oil from one more well [%]', 1, 30, 5, key='wc_thr')
-        run_wc = st.button('▶ Run well-count study', use_container_width=True, key='wc_run', disabled=len(order) < 2)
-    if run_wc:
-        bar = st.progress(0.0, text='Running well-count cases...')
+        rbw = start_run(st, '▶ Run well-count study', key='wc_run', model_hash=graph_hash(nodes, edges), disabled=len(order) < 2)
+    if rbw:
+        rbw.progress(0.02, 'Starting well-count cases…')
         try:
             st.session_state.wc_result = well_count_study(nodes, edges, order, start, float(years), int(step), bool(caps), thr / 100.0, step_solver=_step_solver(st), workers=_workers(st),
-                                                          progress=lambda i, n: bar.progress(i / n, text=f'{i}/{n} wells'))
+                                                          progress=lambda i, n: rbw.progress(i / n, f'{i}/{n} well counts'))
             st.session_state.wc_names = names
-        except Exception as exc: st.error(f'Well-count study failed: {exc}')
-        bar.empty()
+        except Exception as exc: rbw.fail(f'Well-count study failed: {exc}')
+        rbw.finish()
     wc = st.session_state.get('wc_result')
     if wc:
         rows = pd.DataFrame([{k: v for k, v in r.items() if k != '_forecast'} for r in wc['rows']])

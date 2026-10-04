@@ -3,13 +3,19 @@ sensitivity, reliability-weighted prognosis, simulator link, correlation benchma
 from __future__ import annotations
 import io, csv, contextlib
 import pandas as pd
+from ui.run_button import run_button
 
-PANELS = ['Well-test calibration', 'Lift-gas limit', 'Pump / compressor curves', 'Fluid blending', 'Flow assurance (profile)', 'Back-allocation & tests',
+PANELS = ['Lift-gas limit', 'Pump / compressor curves', 'Fluid blending', 'Flow assurance (profile)', 'Back-allocation & tests',
           'Sensitivity', 'Reliability-weighted P10/P50/P90', 'Simulator link', 'Correlation benchmark']
 
 
 def _f(v, fmt='{:,.0f}', unit=''):
     return '—' if v is None else fmt.format(v) + unit
+
+
+def _mh(nodes, edges):
+    from ui.graph_contract import graph_hash
+    return graph_hash(nodes, edges)
 
 
 def _wells(nodes): return [n for n in nodes if n.get('kind') == 'well']
@@ -43,7 +49,7 @@ def calibration(st, nodes, edges, solved):
         buf = io.StringIO(); w = csv.writer(buf, lineterminator='\n'); w.writerow(['well_id', 'whp_bar', 'liquid_rate_m3d', 'bhp_bar'])
         for t in syn: w.writerow([t.well_id, t.whp_bar, round(t.liquid_rate_m3d or 0, 2), '' if t.bhp_bar is None else round(t.bhp_bar, 2)])
         st.session_state.adv_cal_csv = buf.getvalue(); st.rerun()
-    if st.button('Calibrate', type='primary', key='adv_cal_run'):
+    for rb in run_button(st, 'Calibrate', key='adv_cal_run', type='primary', model_hash=_mh(nodes, edges)):
         rows = list(csv.DictReader(io.StringIO(text)))
         tests = [{'well_id': r['well_id'].strip(), 'whp_bar': float(r['whp_bar']), 'liquid_rate_m3d': float(r['liquid_rate_m3d']),
                   **({'bhp_bar': float(r['bhp_bar'])} if (r.get('bhp_bar') or '').strip() else {})} for r in rows if (r.get('well_id') or '').strip()]
@@ -62,7 +68,7 @@ def liftgas(st, nodes, edges, solved):
     st.caption('Shares a limited lift-gas supply among gas-lift wells by equal marginal oil gain (screening; uses full network solves).')
     from network.gaslift_constraint import allocate_with_lift_gas_limit
     tot = st.number_input('Field lift-gas supply [Sm³/d]', 0.0, 1e8, 200000.0, 10000.0, key='adv_lg_total')
-    if st.button('Allocate lift gas', type='primary', key='adv_lg_run'): st.session_state.adv_lg = allocate_with_lift_gas_limit(nodes, edges, float(tot))
+    for rb in run_button(st, 'Allocate lift gas', key='adv_lg_run', type='primary', model_hash=_mh(nodes, edges)): st.session_state.adv_lg = allocate_with_lift_gas_limit(nodes, edges, float(tot))
     r = st.session_state.get('adv_lg')
     if r:
         if not r.get('success', True): st.warning(r.get('message', ''))
@@ -122,7 +128,7 @@ def backalloc(st, nodes, edges, solved):
     c = st.columns(3)
     m = {'oil': c[0].number_input('Metered oil [Sm³/d]', 0.0, 1e9, float(tot['oil']) * 0.97, key='adv_ba_oil'), 'water': c[1].number_input('Metered water [m³/d]', 0.0, 1e9, float(tot['water']) * 0.97, key='adv_ba_wat'),
          'gas': c[2].number_input('Metered gas [Sm³/d]', 0.0, 1e12, float(tot['gas']) * 0.97, key='adv_ba_gas')}
-    if st.button('Back-allocate', type='primary', key='adv_ba_run'):
+    for rb in run_button(st, 'Back-allocate', key='adv_ba_run', type='primary', model_hash=_mh(nodes, edges)):
         t = [{k: r[k] for k in ('well', 'oil', 'water', 'gas')} for r in tests.to_dict('records') if r.get('well')]
         up = {r['well']: float(r.get('uptime', 1.0)) for r in tests.to_dict('records') if r.get('well')}
         res = back_allocate(m, t, up)
@@ -133,7 +139,7 @@ def backalloc(st, nodes, edges, solved):
     st.markdown('**Well-test schedule**')
     a, b, c2 = st.columns(3)
     interval = a.number_input('Test interval [days]', 7, 365, 60, key='adv_ba_int'); cap = b.number_input('Test separator capacity [m³/d] (0 = none)', 0.0, 1e7, 0.0, key='adv_ba_cap'); per_day = c2.number_input('Max tests / day', 1, 10, 1, key='adv_ba_pd')
-    if st.button('Build test schedule', key='adv_ba_sched'):
+    for rb in run_button(st, 'Build test schedule', key='adv_ba_sched', model_hash=_mh(nodes, edges)):
         res = schedule_well_tests([{'id': w['id'], 'rate': det.get(w['id'], {}).get('liquid_rate_m3d', 0.0)} for w in ws], {}, int(interval), (cap or None), int(per_day))
         st.dataframe(pd.DataFrame(res['calendar']), hide_index=True, use_container_width=True)
         if res['skipped']: st.warning('Skipped (above test-separator capacity): ' + ', '.join(str(x['well']) for x in res['skipped']))
@@ -146,8 +152,8 @@ def sensitivity(st, nodes, edges, solved):
     params = default_parameters(nodes, edges, rel=rel)
     st.dataframe(pd.DataFrame([{'parameter': p.label, 'low': p.low, 'high': p.high, 'mode': p.mode} for p in params]), hide_index=True, use_container_width=True)
     wk = int((st.session_state.get('compute') or {}).get('workers', 1) or 1)
-    if st.button('Run tornado', type='primary', key='adv_sens_run'):
-        st.session_state.adv_sens = tornado(nodes, edges, params, metric_fn=total_oil_rate, workers=wk)
+    for rb in run_button(st, 'Run tornado', key='adv_sens_run', type='primary', model_hash=_mh(nodes, edges)):
+        st.session_state.adv_sens = tornado(nodes, edges, params, metric_fn=total_oil_rate, workers=wk, progress=lambda i, n: rb.progress(i / n, f'Solved case {i}/{n}'))
     rows = st.session_state.get('adv_sens')
     if rows:
         from ui import charts
@@ -170,7 +176,7 @@ def reliability(st, nodes, edges, solved):
     av = a.slider('Well availability [%]', 50, 100, 92, key='adv_rel_av') / 100.0; sysav = b.slider('System (facility) availability [%]', 50, 100, 97, key='adv_rel_sys') / 100.0
     mode = c.selectbox('Downtime model', ['bernoulli', 'renewal'], key='adv_rel_mode', help='Renewal uses MTTR (5 d default) and gives realistic outage clustering.')
     n = st.number_input('Samples', 100, 5000, 500, 100, key='adv_rel_n')
-    if st.button('Compute', type='primary', key='adv_rel_run'):
+    for rb in run_button(st, 'Compute', key='adv_rel_run', type='primary', model_hash=_mh(nodes, edges)):
         st.session_state.adv_rel = uptime_weighted_profiles(fc, av, int(n), 1234, mode, system_availability=sysav)
     r = st.session_state.get('adv_rel')
     if r:
@@ -197,7 +203,7 @@ def simlink(st, nodes, edges, solved):
         a, b = st.columns(2)
         wcts = [float(x) for x in a.text_input('Water cut [-]', '0,0.3,0.6', key='adv_sim_wct').split(',') if x.strip()]
         gors = [float(x) for x in b.text_input('GOR [Sm³/Sm³]', '100,200', key='adv_sim_gor').split(',') if x.strip()]
-        if st.button('Build VFPPROD table', key='adv_sim_vfp'): st.session_state.adv_vfp = export_vfp_prod(w, rates, whps, wcts, gors)
+        for rb in run_button(st, 'Build VFPPROD table', key='adv_sim_vfp', model_hash=_mh(nodes, edges)): st.session_state.adv_vfp = export_vfp_prod(w, rates, whps, wcts, gors)
         if st.session_state.get('adv_vfp'):
             st.download_button('Download VFPPROD (.inc)', st.session_state.adv_vfp, 'fieldnet_vfp.inc', 'text/plain', key='adv_sim_dl'); st.code(st.session_state.adv_vfp[:1500])
     fc = st.session_state.get('forecast')
@@ -216,7 +222,7 @@ def benchmark(st, nodes, edges, solved):
     st.dataframe(t[keep], hide_index=True, use_container_width=True)
 
 
-_FN = [calibration, liftgas, curves, blending, assurance, backalloc, sensitivity, reliability, simlink, benchmark]
+_FN = [liftgas, curves, blending, assurance, backalloc, sensitivity, reliability, simlink, benchmark]
 
 
 def render_advanced(st, nodes, edges, solved):

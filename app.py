@@ -22,7 +22,8 @@ if _sys.modules.get('_fieldnet_code_sig') is not None and getattr(_sys.modules['
 import types as _types
 _sys.modules['_fieldnet_code_sig']=_types.SimpleNamespace(value=_sig)
 # ------------------------------------------------------------------------------------------
-import json, uuid
+import json
+import time, uuid
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -61,7 +62,9 @@ from ui.theme import THEMES, apply_theme
 from solver.diagnostics import solver_diagnostics
 from physics.well_model import well_settings
 from ui.forecast_view import render_forecast
-from ui.advanced_view import render_advanced
+from ui.advanced_view import render_advanced, calibration as render_well_test_calibration
+from ui.run_button import run_button, style_button
+from ui.prediction_view import render_prediction_sources
 from ui.development_view import render_schedule, render_scenarios
 from ui.constraints_view import render_constraint_editor
 from ui import charts
@@ -81,7 +84,7 @@ from network.coupled_forecast_v25 import run_coupled_forecast_v25
 BOUNDARY_KINDS=('sink','separator','separator_stage','oil_export','gas_export','water_disposal','water_source','gas_source')
 LINK_TYPES=['pipeline','choke','control_valve','pump','compressor']
 
-st.set_page_config(page_title='FieldNet v31',page_icon='⛽',layout='wide')
+st.set_page_config(page_title='FieldNet',page_icon='⛽',layout='wide')
 if 'theme_name' not in st.session_state: st.session_state.theme_name='Equinor-inspired Light'
 if 'unit_profile' not in st.session_state: st.session_state.unit_profile='norwegian_si'
 def equipment_panel(ep, kind, eid):
@@ -106,7 +109,7 @@ with st.sidebar:
     with st.expander('Unit reference conditions'):
         st.write(f"Standard volumes: {STANDARD_CONDITIONS['standard_temperature_c']:.0f} °C and {STANDARD_CONDITIONS['standard_pressure_bara']:.5f} bara. Pressure-dependent PVT uses absolute pressure.")
 apply_theme(st,st.session_state.theme_name)
-st.markdown("<div class='fieldnet-brand'><h2>FieldNet v31 — Production Network &amp; Prognosis</h2><p>Made by Merouane Hamdani · For non-commercial use · Independent engineering prototype</p></div>",unsafe_allow_html=True)
+st.markdown("<div class='fieldnet-brand'><h2>FieldNet — Production Network &amp; Prognosis</h2><p>Made by Merouane Hamdani · For non-commercial use · Independent engineering prototype</p></div>",unsafe_allow_html=True)
 st.caption('Equinor-inspired themes are unofficial and are not affiliated with, endorsed by, or sponsored by Equinor ASA. Validate engineering correlations before operational use.')
 if 'nodes' not in st.session_state: st.session_state.nodes,st.session_state.edges=demo_field_case()
 if 'solve' not in st.session_state: st.session_state.solve=None
@@ -171,25 +174,32 @@ with st.sidebar:
     st.caption('Connect components in the editor: drag from an OUT port onto another component’s IN port.')
     if st.button('Load demo field',use_container_width=True): st.session_state.nodes,st.session_state.edges=demo_field_case(); reset_solve(); [st.session_state.pop(k,None) for k in ('forecast','sched_result','scn_results','wc_result')]; st.rerun()
 
-G=st.tabs(['🗺️ Network','🛢️ Wells & reservoirs','📊 Network results','📈 Forecast & development','⚙️ Optimization','🎲 Uncertainty & risk','🗂️ Data & QA','🧪 Advanced'])
+G=st.tabs(['🗺️ Network','🛢️ Reservoir & wells','📊 Results','📈 Prognosis','🎯 Calibration','🎲 Uncertainty','🧰 Tools'])
 tab_net=G[0]
-with G[1]: tab_nodal,tab_tanks=st.tabs(['Nodal analysis','Reservoir tanks'])
-with G[2]: tab_results,tab_constraints,tab_diag,tab_fa,tab_elem=st.tabs(['Summary','Constraints & equipment','Hydraulic profiles','Flow assurance','Element results'])
-with G[3]: tab_forecast,tab_dev26,tab_development,tab_res25=st.tabs(['Production forecast','Development schedule','Scenarios & well count','Multi-tank coupling (advanced)'])
-with G[4]: tab_ops,tab_comp,tab_cal=st.tabs(['Optimization & sensitivity','Compressor speed','Calibration'])
+with G[1]: tab_nodal,tab_tanks,tab_sources=st.tabs(['Nodal analysis','Tanks & coupling','Prediction source'])
+with G[2]: tab_results,tab_diag,tab_elem=st.tabs(['Summary & constraints','Profiles & flow assurance','Element results'])
+with G[3]: tab_forecast,tab_dev26,tab_development=st.tabs(['Production forecast','Development schedule','Scenarios & well count'])
+with G[4]: tab_cal=st.container()
 with G[5]: tab_uncertainty,tab_rel=st.tabs(['Monte Carlo','Reliability'])
-with G[7]: tab_adv=st.container()
-with G[6]: tab_qa28,tab_io27,tab_scen29=st.tabs(['Model assurance','Import / export','Snapshots'])
+with G[6]: tab_ops,tab_qa28,tab_io27=st.tabs(['Engineering tools','Model checks','Import / export & snapshots'])
+# merged sections: blocks below write into the same tab in code order
+tab_constraints=tab_results; tab_fa=tab_diag; tab_res25=tab_tanks; tab_comp=tab_ops; tab_adv=tab_ops; tab_scen29=tab_io27
 with tab_net:
-    canvas,props=st.columns([3.2,1])
+    _e1,_e2,_e3=st.columns([1.2,2,3])
+    _wide=_e1.toggle('Wide editor',value=False,key='ed_wide',help='Full-width canvas; the component properties move below it.')
+    _edh=int(_e2.slider('Editor height',600,1600,1050,50,key='ed_h'))
+    _e3.caption('Tip: ▶ Solve is right above the canvas. Select a component in the canvas to edit it.')
+    if _wide: canvas=st.container(); props=st.container()
+    else: canvas,props=st.columns([3.6,1.15])
     with canvas:
         status,status_msg=solve_status(st.session_state)
         tb1,tb2,tb3=st.columns([1,2.2,1.4])
+        style_button(st,'solve_btn_top','done' if status==SOLVED else 'failed' if status==FAILED else 'running' if status==SOLVING else 'none')
         if tb1.button('▶ Solve network',type='primary',use_container_width=True,disabled=status==SOLVING,key='solve_btn_top'): request_solve()
         _honour=tb2.checkbox('Honour constraints',value=True,key='cmp_honour_cb',help='On: separator / export capacities, per-phase limits, velocity, erosion and connection limits are enforced by choking upstream wells (GAP "with constraints"). Off: unconstrained solve; violations are only reported.')
         tb3.caption(f"{'🟢' if status==SOLVED else '🟡' if status==SOLVING else '🔴' if status==FAILED else '⚪'} {status}")
         compute=render_compute_settings(st,st.session_state.nodes,st.session_state.edges,honour=_honour)
-        edit=network_editor(st.session_state.nodes, st.session_state.edges, solved(), key='network-v14', height=860,
+        edit=network_editor(st.session_state.nodes, st.session_state.edges, solved(), key='network-v14', height=_edh,
                             status=status, status_message=status_msg, selected=st.session_state.get('selected'),
                             palette=feature_palette(), labels=canvas_labels(st.session_state.nodes, solved()))
         # One contract (ui/graph_contract.py): only a new canvas revision is an edit; stale replays are ignored.
@@ -197,10 +207,13 @@ with tab_net:
         for msg in st.session_state.pop('graph_issues',[]) or []: st.warning(msg)
         if st.session_state.pop('solve_request',False):
             # The editor above has already been sent with the SOLVING badge.
-            with st.spinner('Solving network...'):
+            _pbar=st.progress(0.1,text='Preparing model…'); _t0=time.perf_counter()
+            if True:
+                _pbar.progress(0.25,text='Solving network'+(' and optimising well controls…' if compute['optimizer']['enabled'] else ' (honouring constraints)…' if compute['honour'] else '…'))
                 _base=make_network_solver(compute)
                 _solver=(lambda n_,e_,warm_start=None,attempts=3,**kw: solve_parallel(n_,e_,solve_v21,compute['workers'],warm_start=warm_start,attempts=attempts,enforce_constraints=compute['honour'])) if compute['workers']>1 and not compute['optimizer']['enabled'] else _base
                 run_solve(st.session_state, _solver, warm_start=st.session_state.get('v21_warm_start'), attempts=3)
+                _pbar.progress(1.0,text=f'Finished in {time.perf_counter()-_t0:.1f} s')
             st.rerun()
         badge={UNSOLVED:'⚪',SOLVING:'🟡',SOLVED:'🟢',FAILED:'🔴'}[status]
         st.markdown(f"**Model state:** {badge} {status}" + (f" — {status_msg}" if status_msg else ''))
@@ -374,7 +387,7 @@ with tab_net:
     else: st.session_state['_panel_reruns']=0
     c1,c2,c3=st.columns([1,1,1])
     payload=json.dumps(to_builtin({'version':'30','application':'FieldNet v30','storage_units':'canonical','display_unit_profile':PROFILE,'standard_conditions':STANDARD_CONDITIONS,'nodes':st.session_state.nodes,'edges':st.session_state.edges}),indent=2,default=str); c3.download_button('Export network SVG',network_svg(st.session_state.nodes,st.session_state.edges,canvas_labels(st.session_state.nodes,solved()),(solved() or ({},{},{},{}))[1]),'fieldnet_network.svg','image/svg+xml',use_container_width=True)
-    c2.download_button('Export case JSON',payload,'fieldnet_v30_case.json','application/json',use_container_width=True)
+    c2.download_button('Export case JSON',payload,'fieldnet_case.json','application/json',use_container_width=True)
     uploaded=st.file_uploader('Load FieldNet project JSON',type=['json'],key='project_upload')
     if uploaded is not None and st.button('Load project',use_container_width=True):
         try:
@@ -388,14 +401,14 @@ with tab_net:
         for a in _i.get('constraint_actions',[])[-5:]: st.info(a['message'])
         for w in _i.get('well_warnings',[]): st.warning(w['message'])
 
-with tab_adv:
-    render_advanced(st,solver_input(st.session_state.nodes,st.session_state.edges)[0],st.session_state.edges,solved())
-
 with tab_elem:
     st.subheader('Element results & profiles')
     st.caption('Pressure, phase rates, velocity and erosional ratio for any node or flowline; tubing and flowline profiles; time series from the last forecast.')
     _r_=solved()
     render_element_results(st,solver_input(st.session_state.nodes,st.session_state.edges)[0],st.session_state.edges,_r_,st.session_state.get('forecast'))
+
+with tab_sources:
+    render_prediction_sources(st,st.session_state.nodes,st.session_state.edges)
 
 with tab_nodal:
     wells=[n for n in st.session_state.nodes if n['kind']=='well']
@@ -442,7 +455,7 @@ with tab_nodal:
             st.info(f"ESP head {pressure_to_display(ep['head_bar'],PROFILE):.1f} {ul['pressure']} · hydraulic power {ep['hydraulic_power_kw']:.0f} kW · {'within' if ep['within_rate_envelope'] else 'OUTSIDE'} recommended rate envelope")
         with st.expander('Gas-lift performance curve'):
             gmax=st.number_input('Maximum injection to screen [Sm³/d]',10000.0,2000000.0,max(3*float(clean_num(prm.get('gas_lift_injection_sm3d'),30000.0)),90000.0),10000.0,key='nodal_glmax_'+wid)
-            if st.button('Compute gas-lift curve',key='nodal_glbtn_'+wid):
+            for rb in run_button(st,'Compute gas-lift curve',key='nodal_glbtn_'+wid,model_hash=graph_hash(st.session_state.nodes,st.session_state.edges)):
                 rows=[]
                 for inj in [gmax*i/12 for i in range(13)]:
                     pp=dict(prm,lift_type='gas_lift',gas_lift_injection_sm3d=inj); q_,_=solve_well_rate(whp,well_settings(pp)); rows.append({'Gas-lift injection [Sm3/d]':inj,'Liquid rate [m3/d]':q_})
@@ -554,49 +567,32 @@ with tab_constraints:
             st.dataframe(pd.DataFrame(info['equipment']),hide_index=True,use_container_width=True)
 
 with tab_ops:
-    st.subheader('Network solver & debottlenecking')
-    st.caption('Topology prechecks, warm starts, retry orchestration, physical residual reconstruction and equation-level failure diagnostics.')
-    if st.button('Run network solver',use_container_width=True): request_solve()
+    st.subheader('Debottlenecking & sensitivity')
+    st.caption('Production optimisation now lives in the **Solve** toolbar of the Network tab (tick *Optimise while solving*): the optimiser, capacity constraints and parallel options are one operation with the solve. Use this section for what-if screening.')
     r=solved()
     if r:
         _p,_q,_i,_d=r
         a,b,c=st.columns(3); a.metric('Quality gate',_i.get('quality_gate','N/A')); b.metric('Normalized residual',f"{_i.get('normalized_residual_score',0):.3g}"); c.metric('Active constraints',len(_i.get('active_constraints',[])))
-        if st.button('Screen +10% capacity debottlenecks',use_container_width=True): st.session_state.v14_debottleneck=debottleneck_screen(st.session_state.nodes,st.session_state.edges,0.10)
+        for rb in run_button(st,'Screen +10% capacity debottlenecks',key='rb_debott',model_hash=graph_hash(st.session_state.nodes,st.session_state.edges)):
+            rb.progress(0.1,'Re-solving with each capacity raised 10 %…'); st.session_state.v14_debottleneck=debottleneck_screen(st.session_state.nodes,st.session_state.edges,0.10)
         if st.session_state.get('v14_debottleneck') is not None:
             if st.session_state.v14_debottleneck: st.dataframe(pd.DataFrame(st.session_state.v14_debottleneck),hide_index=True,use_container_width=True)
             else: st.caption('No capacity limits are configured, so there is nothing to debottleneck.')
         audit=calculation_audit(st.session_state.nodes,st.session_state.edges,_i,_d)
         st.download_button('Download calculation audit JSON',json.dumps(to_builtin(audit),indent=2,default=str),'fieldnet_audit.json','application/json',use_container_width=True)
-    st.divider()
-    st.subheader('Integrated production optimization')
-    st.caption('Optimizes solver-active controls jointly against network and facility constraints. Feasibility is reported separately from production objective; global optimality is not guaranteed.')
-    oc1,oc2=st.columns(2); opt_iter=oc1.slider('Optimization iterations',1,40,8); opt_seed=oc2.number_input('Optimization seed',0,999999,22)
-    if st.button('Optimize integrated production', type='primary'):
-        with st.spinner('Optimizing wells and solver-active equipment controls...'):
-            try: st.session_state.opt_v22=optimize_integrated(st.session_state.nodes,st.session_state.edges,maxiter=int(opt_iter),seed=int(opt_seed))
-            except Exception as exc: st.error(f'Optimization failed: {exc}')
-    if st.session_state.get('opt_v22'):
-        o=st.session_state.opt_v22; m1,m2,m3=st.columns(3); m1.metric('Optimized liquid',f"{o.get('best_rate_m3d',0):.1f} m³/d"); m2.metric('Gain',f"{o.get('production_gain_m3d',0):+.1f} m³/d"); m3.metric('Feasible','YES' if o.get('feasible') else 'NO')
-        if o.get('decisions'):
-            rows=[]
-            for dd in o['decisions']: rows.append({'Component':dd['component_name'],'Control':dd['kind'],'Lower':dd['lower'],'Optimized':o['controls'].get(dd['key']),'Upper':dd['upper']})
-            st.dataframe(pd.DataFrame(rows),hide_index=True,use_container_width=True)
-        if o.get('unsupported'):
-            for msg in o['unsupported']: st.warning(msg)
-        st.caption(f"Method: {o.get('method','')} · Global optimum guaranteed: {o.get('global_optimum_guaranteed',False)} · Seed: {o.get('seed')}")
-        if (o.get('best') or {}).get('violations'): st.dataframe(pd.DataFrame(o['best']['violations']),hide_index=True,use_container_width=True)
-        st.download_button('Download optimization JSON',json.dumps(to_builtin({k:v for k,v in o.items() if k!='best'}),indent=2,default=str),'fieldnet_optimization.json','application/json',use_container_width=True)
+    else: st.info('Solve the network first (▶ Solve in the Network tab).')
     st.divider(); st.subheader('One-variable sensitivity')
     candidates=[n for n in st.session_state.nodes if n['kind'] in BOUNDARY_KINDS and n.get('pressure_bar') is not None]
     if candidates:
         cm={n['id']:n for n in candidates}
         sn=cm[pick('Boundary component',list(cm),'sensnode',format_func=lambda k: cm[k]['name'])]
         lo=unit_input(f"Start pressure [{ul['pressure']}]",20.0,pressure_to_display,pressure_from_display,'sens_lo',0.1,1000.0); hi=unit_input(f"End pressure [{ul['pressure']}]",60.0,pressure_to_display,pressure_from_display,'sens_hi',0.1,1000.0); steps=st.slider('Cases',3,15,7)
-        if st.button('Run pressure sensitivity'):
-            st.session_state.sens=run_sensitivity(st.session_state.nodes,st.session_state.edges,'node',sn['id'],'pressure_bar',np.linspace(lo,hi,steps))
+        for rb in run_button(st,'Run pressure sensitivity',key='rb_sens1',model_hash=graph_hash(st.session_state.nodes,st.session_state.edges)):
+            rb.progress(0.1,f'Solving {steps} cases…'); st.session_state.sens=run_sensitivity(st.session_state.nodes,st.session_state.edges,'node',sn['id'],'pressure_bar',np.linspace(lo,hi,steps))
         if st.session_state.get('sens'):
             sdf=pd.DataFrame(st.session_state.sens); st.dataframe(sdf,hide_index=True,use_container_width=True); st.plotly_chart(charts.style(px.line(sdf,x='Value',y='Total liquid [m3/d]',markers=True,title='Production sensitivity to boundary pressure [bar]')),use_container_width=True)
     else: st.caption('Add a fixed-pressure boundary to run a sensitivity.')
+    st.divider()
 
 
 with tab_comp:
@@ -605,31 +601,34 @@ with tab_comp:
 
 with tab_cal:
     st.subheader('Calibration & history matching')
-    st.caption('Bounded weighted least-squares against measured free-node pressures (wellheads, manifolds) and connection liquid rates. Fit quality does not imply parameter uniqueness or physical correctness.')
-    r=solved(); rows=[]
-    # Only FREE pressures are observable: a fixed boundary pressure is an input, so matching
-    # it (as the previous table offered) had zero sensitivity to every parameter.
-    for n in st.session_state.nodes:
-        if n.get('pressure_bar') is None and n['kind']!='reservoir' and (not r or n['id'] in r[0]):
-            rows.append({'enabled':False,'kind':'node_pressure_bar','target_id':n['id'],'name':n.get('name',n['id']),'value':float(r[0][n['id']]) if r else 0.0,'sigma':1.0})
-    for e in st.session_state.edges:
-        if e.get('kind','pipeline') in LINK_TYPES: rows.append({'enabled':False,'kind':'edge_rate_m3d','target_id':e['id'],'name':e.get('name',e['id']),'value':float(r[1][e['id']]) if r else float(clean_num((e.get('params') or {}).get('initial_rate_m3d'),500.0)),'sigma':10.0})
-    st.caption('Measured values default to the current solution; overwrite them with field data and tick "enabled".')
-    obsdf=st.data_editor(pd.DataFrame(rows),use_container_width=True,key='v23_obs_'+str(len(rows)))
-    maxeval=st.slider('Maximum calibration evaluations',5,150,40,key='v23_maxeval')
-    if st.button('Run calibration',use_container_width=True):
-        try:
-            obs=[Observation(str(rw['kind']),str(rw['target_id']),float(clean_num(rw['value'],0.0)),float(clean_num(rw['sigma'],1.0)),clean_text(rw.get('name'))) for rw in obsdf.to_dict('records') if bool(rw.get('enabled')) and clean_num(rw.get('value')) is not None]
-            st.session_state.cal_v23=calibrate(st.session_state.nodes,st.session_state.edges,obs,max_nfev=maxeval)
-        except Exception as exc: st.error(str(exc))
-    if st.session_state.get('cal_v23'):
-        c=st.session_state.cal_v23; a,b,dd=st.columns(3); a.metric('Weighted RMSE',f"{c['weighted_rmse']:.3f}"); b.metric('Jacobian rank',str(c['jacobian_rank'])); dd.metric('Locally identifiable','YES' if c['identifiable_linearized'] else 'NO')
-        st.dataframe(pd.DataFrame([{'parameter':k,'value':v,'std':(c.get('parameter_std') or {}).get(k),'at_bound':c['at_bounds'].get(k)} for k,v in c['values'].items()]),use_container_width=True)
-        st.dataframe(pd.DataFrame([{'measurement':o.get('name') or o['target_id'],'kind':o['kind'],'observed':o['value'],'predicted':pv,'normalized_residual':rv} for o,pv,rv in zip(c['observations'],c['predicted'],c['normalized_residuals'])]),use_container_width=True)
-        if st.button('Apply calibrated parameters to the case'):
-            st.session_state.nodes=to_builtin(c['calibrated_nodes']); st.session_state.edges=to_builtin(c['calibrated_edges']); st.success('Calibrated parameters applied. Re-solve the network.'); st.rerun()
-        export={k:v for k,v in c.items() if k not in ('calibrated_nodes','calibrated_edges','solver_info')}
-        st.download_button('Download calibration JSON',json.dumps(to_builtin(export),indent=2,default=str),'fieldnet_calibration.json','application/json',use_container_width=True)
+    cal_a,cal_b=st.tabs(['Match measured pressures & rates','Match well tests (IPR / VLP)'])
+    with cal_b: render_well_test_calibration(st,st.session_state.nodes,st.session_state.edges,solved())
+    with cal_a:
+        st.caption('Bounded weighted least-squares against measured free-node pressures (wellheads, manifolds) and connection liquid rates. Fit quality does not imply parameter uniqueness or physical correctness.')
+        r=solved(); rows=[]
+        # Only FREE pressures are observable: a fixed boundary pressure is an input, so matching
+        # it (as the previous table offered) had zero sensitivity to every parameter.
+        for n in st.session_state.nodes:
+            if n.get('pressure_bar') is None and n['kind']!='reservoir' and (not r or n['id'] in r[0]):
+                rows.append({'enabled':False,'kind':'node_pressure_bar','target_id':n['id'],'name':n.get('name',n['id']),'value':float(r[0][n['id']]) if r else 0.0,'sigma':1.0})
+        for e in st.session_state.edges:
+            if e.get('kind','pipeline') in LINK_TYPES: rows.append({'enabled':False,'kind':'edge_rate_m3d','target_id':e['id'],'name':e.get('name',e['id']),'value':float(r[1][e['id']]) if r else float(clean_num((e.get('params') or {}).get('initial_rate_m3d'),500.0)),'sigma':10.0})
+        st.caption('Measured values default to the current solution; overwrite them with field data and tick "enabled".')
+        obsdf=st.data_editor(pd.DataFrame(rows),use_container_width=True,key='v23_obs_'+str(len(rows)))
+        maxeval=st.slider('Maximum calibration evaluations',5,150,40,key='v23_maxeval')
+        for rb in run_button(st,'Run calibration',key='rb_cal',model_hash=graph_hash(st.session_state.nodes,st.session_state.edges)):
+            try:
+                rb.progress(0.1,'Fitting parameters to the measurements…'); obs=[Observation(str(rw['kind']),str(rw['target_id']),float(clean_num(rw['value'],0.0)),float(clean_num(rw['sigma'],1.0)),clean_text(rw.get('name'))) for rw in obsdf.to_dict('records') if bool(rw.get('enabled')) and clean_num(rw.get('value')) is not None]
+                st.session_state.cal_v23=calibrate(st.session_state.nodes,st.session_state.edges,obs,max_nfev=maxeval)
+            except Exception as exc: rb.fail(str(exc))
+        if st.session_state.get('cal_v23'):
+            c=st.session_state.cal_v23; a,b,dd=st.columns(3); a.metric('Weighted RMSE',f"{c['weighted_rmse']:.3f}"); b.metric('Jacobian rank',str(c['jacobian_rank'])); dd.metric('Locally identifiable','YES' if c['identifiable_linearized'] else 'NO')
+            st.dataframe(pd.DataFrame([{'parameter':k,'value':v,'std':(c.get('parameter_std') or {}).get(k),'at_bound':c['at_bounds'].get(k)} for k,v in c['values'].items()]),use_container_width=True)
+            st.dataframe(pd.DataFrame([{'measurement':o.get('name') or o['target_id'],'kind':o['kind'],'observed':o['value'],'predicted':pv,'normalized_residual':rv} for o,pv,rv in zip(c['observations'],c['predicted'],c['normalized_residuals'])]),use_container_width=True)
+            if st.button('Apply calibrated parameters to the case'):
+                st.session_state.nodes=to_builtin(c['calibrated_nodes']); st.session_state.edges=to_builtin(c['calibrated_edges']); st.success('Calibrated parameters applied. Re-solve the network.'); st.rerun()
+            export={k:v for k,v in c.items() if k not in ('calibrated_nodes','calibrated_edges','solver_info')}
+            st.download_button('Download calibration JSON',json.dumps(to_builtin(export),indent=2,default=str),'fieldnet_calibration.json','application/json',use_container_width=True)
 
 with tab_forecast:
     render_forecast(st, st.session_state.nodes, st.session_state.edges)
@@ -652,16 +651,16 @@ with tab_rel:
     rdf=st.data_editor(pd.DataFrame(rows),use_container_width=True,key='v24_rel_specs')
     a,b,c,d=st.columns(4); ryears=a.number_input('Reliability years',0.1,30.0,1.0,0.5); rstep=b.selectbox('Reliability step [days]',[1,7,14,30]); rn=c.number_input('Realizations',10,5000,200,10); rseed=d.number_input('Seed',0,999999,2401,1)
     base_rate=st.number_input('Reference production [m³/d]',0.0,1e7,1000.0,100.0)
-    if st.button('Run reliability study',type='primary',use_container_width=True):
+    for rb in run_button(st,'Run reliability study',key='rb_run_reliability_study',type='primary',model_hash=graph_hash(st.session_state.nodes,st.session_state.edges)):
         try:
             specs=[ReliabilitySpec(clean_text(rw.get('target_id')),clean_num(rw.get('mtbf_days'),365.0),clean_num(rw.get('mttr_days'),3.0),(),clean_text(rw.get('redundancy_group')),int(clean_num(rw.get('required_online'),1))) for rw in rdf.to_dict('records') if bool(rw.get('enabled'))]
             if not specs: raise ValueError('Tick "enabled" for at least one component.')
             st.session_state.rel_v24=run_reliability(ReliabilityStudy(float(ryears),int(rstep),int(rn),int(rseed),specs),float(base_rate))
-        except Exception as exc: st.error(str(exc))
+        except Exception as exc: rb.fail(str(exc))
     if st.session_state.get('rel_v24'):
         rr=st.session_state.rel_v24; sm=rr['summary']; a,b,c,d=st.columns(4); a.metric('Mean availability',f"{sm['mean_availability']:.1%}"); b.metric('P90 availability',f"{sm['p90_availability']:.1%}"); c.metric('Mean deferred',f"{sm['mean_deferred_m3']:,.0f} m³"); d.metric('P(A<90%)',f"{sm['probability_below_90pct_availability']:.1%}")
         rrf=pd.DataFrame(rr['realizations']); st.plotly_chart(charts.style(px.histogram(rrf,x='availability',title='Availability distribution')),use_container_width=True); st.dataframe(rrf,hide_index=True,use_container_width=True)
-        st.download_button('Download reliability JSON',json.dumps(to_builtin(rr),indent=2,default=str),'fieldnet_v24_reliability.json','application/json',use_container_width=True)
+        st.download_button('Download reliability JSON',json.dumps(to_builtin(rr),indent=2,default=str),'fieldnet_reliability.json','application/json',use_container_width=True)
 
 with tab_res25:
     st.subheader('Reservoir tanks & coupling')
@@ -680,16 +679,16 @@ with tab_res25:
         else: st.caption('No communication links: tanks deplete independently.')
         a_,b_,c_=st.columns(3)
         cstart=a_.date_input('Forecast start',key='coup_start').isoformat(); cyrs=b_.number_input('Years',0.02,50.0,5.0,0.5,key='coup_years'); cstep=c_.selectbox('Time step [days]',[7,14,30,60,90],index=2,key='coup_step')
-        if st.button('Run forecast with tank coupling',type='primary',use_container_width=True):
+        for rb in run_button(st,'Run forecast with tank coupling',key='rb_run_forecast_with_tank_coupling',type='primary',model_hash=graph_hash(st.session_state.nodes,st.session_state.edges)):
             try:
                 with st.spinner('Forecasting with material balance, communication and aquifer influx...'):
                     st.session_state.forecast=run_forecast(st.session_state.nodes,st.session_state.edges,cstart,float(cyrs),int(cstep),None,None,enforce_constraints=bool(compute['honour']),step_solver=make_forecast_step_solver(compute)); st.session_state.forecast_hash=graph_hash(st.session_state.nodes,st.session_state.edges)
-            except Exception as exc: st.error(str(exc))
+            except Exception as exc: rb.fail(str(exc))
         fc_=st.session_state.get('forecast')
         if fc_ and fc_.get('tanks'):
             tf_=pd.DataFrame(fc_['tanks']); st.plotly_chart(charts.style(px.line(tf_,x='Date',y='Pressure [bar]',color='Tank',title='Tank pressure'),y='Pressure [bar]'),use_container_width=True)
             if 'Net communication [m3]' in tf_ and tf_['Net communication [m3]'].abs().max()>0: st.plotly_chart(charts.style(px.line(tf_,x='Date',y='Net communication [m3]',color='Tank',title='Net volume received through communication links'),y='m³'),use_container_width=True)
-    with st.expander('Legacy table-based coupling (v25: separate tank/mapping tables)'):
+    with st.expander('Legacy table-based coupling (separate tank / mapping tables)'):
         st.subheader('Multi-tank reservoir coupling')
         st.caption('Reduced-order quasi-steady material balance coupled to the production network. Communicating tanks, aquifer influx and injector connectivity are planning models—not a 3-D reservoir simulator.')
         wells25=[n for n in st.session_state.nodes if n.get('kind')=='well']
@@ -716,7 +715,7 @@ with tab_res25:
         cdf25=st.data_editor(pd.DataFrame(columns=['injector_id','tank_id','weight']),num_rows='dynamic',use_container_width=True,key='v25_conn')
         sdf25=st.data_editor(pd.DataFrame(columns=['date','injector_id','rate_m3d']),num_rows='dynamic',use_container_width=True,key='v25_injsched')
         a,b,c=st.columns(3); rstart=a.date_input('Coupled forecast start',key='v25_start').isoformat(); ryears=b.number_input('Coupled years',0.02,50.0,1.0,0.25,key='v25_years'); rstep=c.selectbox('Coupled timestep [days]',[7,14,30,60,90],index=2,key='v25_step')
-        if st.button('Run coupled forecast',type='primary',use_container_width=True):
+        for rb in run_button(st,'Run coupled forecast',key='rb_run_coupled_forecast',type='primary',model_hash=graph_hash(st.session_state.nodes,st.session_state.edges)):
             try:
                 tanks=[]
                 for rw in tdf.to_dict('records'):
@@ -731,7 +730,7 @@ with tab_res25:
                 conns=[InjectorConnection(clean_text(rw.get('injector_id')),clean_text(rw.get('tank_id')),clean_num(rw.get('weight'),1.0)) for rw in cdf25.to_dict('records') if clean_text(rw.get('injector_id')) and clean_text(rw.get('tank_id'))]
                 sched=[{'date':pd.Timestamp(clean_text(rw.get('date'))).date().isoformat(),'injector_id':clean_text(rw.get('injector_id')),'rate_m3d':clean_num(rw.get('rate_m3d'),0.0)} for rw in sdf25.to_dict('records') if clean_text(rw.get('date')) and clean_text(rw.get('injector_id'))]
                 st.session_state.res25=run_coupled_forecast_v25(st.session_state.nodes,st.session_state.edges,tanks,mapping,rstart,float(ryears),int(rstep),injector_schedule=sched,injector_connections=conns,aquifers=aquifers,communication_links=links)
-            except Exception as exc: st.error(str(exc))
+            except Exception as exc: rb.fail(str(exc))
         if st.session_state.get('res25'):
             rr=st.session_state.res25; tf=pd.DataFrame(rr['tanks']); ff=pd.DataFrame(rr['field'])
             if not tf.empty:
@@ -739,7 +738,7 @@ with tab_res25:
                 st.dataframe(tf,hide_index=True,use_container_width=True)
             if not ff.empty: st.plotly_chart(charts.style(px.line(ff,x='Date',y='Oil [m3/d]',title='Coupled field oil')),use_container_width=True)
             if rr.get('transfers'): st.dataframe(pd.DataFrame(rr['transfers']),hide_index=True,use_container_width=True)
-            st.download_button('Download coupling JSON',json.dumps(to_builtin(rr),indent=2,default=str),'fieldnet_v25_reservoir_coupling.json','application/json',use_container_width=True)
+            st.download_button('Download coupling JSON',json.dumps(to_builtin(rr),indent=2,default=str),'fieldnet_reservoir_coupling.json','application/json',use_container_width=True)
 
 
 
@@ -751,14 +750,18 @@ with tab_io27:
 with tab_qa28:
     st.subheader('Engineering QA & model assurance')
     st.caption('Read-only assurance: definite invariant violations are errors; suspicious engineering values are warnings. No inputs are auto-corrected.')
-    if st.button('Run Model Quality Report', type='primary', use_container_width=True):
+    for rb in run_button(st,'Run Model Quality Report',key='rb_model_quality',type='primary',model_hash=graph_hash(st.session_state.nodes,st.session_state.edges)):
         sr=solved()  # (pressures, flows, info, details); previously a dict was expected so post-solve checks never ran
         st.session_state.qa28=model_quality_report(st.session_state.nodes,st.session_state.edges,unit_profile=st.session_state.unit_profile,solve_result=sr,forecast=st.session_state.get('forecast'))
     if st.session_state.get('qa28'):
         qr=st.session_state.qa28; a,b,c,d=st.columns(4); a.metric('Quality gate',qr['quality_gate']); b.metric('Errors',qr['counts'].get('error',0)); c.metric('Warnings',qr['counts'].get('warning',0)); d.metric('Checks/info',qr['counts'].get('info',0))
         qdf=pd.DataFrame(qr['issues']); st.dataframe(qdf,hide_index=True,use_container_width=True)
-        st.download_button('Download model quality report',json.dumps(to_builtin(qr),indent=2,default=str),'fieldnet_v28_model_quality.json','application/json',use_container_width=True)
+        st.download_button('Download model quality report',json.dumps(to_builtin(qr),indent=2,default=str),'fieldnet_model_quality.json','application/json',use_container_width=True)
 
 
 with tab_scen29:
     render_scenario_v29(st, st.session_state.nodes, st.session_state.edges, st.session_state.unit_profile)
+
+with tab_adv:
+    render_advanced(st,solver_input(st.session_state.nodes,st.session_state.edges)[0],st.session_state.edges,solved())
+

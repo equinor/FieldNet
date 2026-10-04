@@ -103,8 +103,9 @@ def iter_forecast(nodes, edges, start_date, years=5, step_days=30, events=None, 
         return ev
 
     last_pq={}
-    def solve_now(nn0, date=None):
+    def solve_now(nn0, date=None, day=None):
         nonlocal guess
+        for tk in tanks.values(): tk.apply_external(t if day is None else day, start_date)
         nn=_copy.deepcopy(nn0)
         for n in nn:
             if n['kind']=='well' and n['id'] in state and not (n.get('params') or {}).get('reservoir_id') in tanks:
@@ -150,6 +151,7 @@ def iter_forecast(nodes, edges, start_date, years=5, step_days=30, events=None, 
                 v=per_tank[tid]; tk.step(v['oil']*sub,v['wat']*sub,v['gas']*sub,v['winj']*sub,v['ginj']*sub,sub)
             for tid,vol_ in xfer.items():
                 if abs(vol_)>0: tanks[tid].exchange(vol_)
+            for tk in tanks.values(): tk.apply_external(t+dt_days-(rem-sub),start_date)
             for wid,w in wells.items():
                 st=state[wid]; st['cum_liq']+=w['liq']*sub; st['cum_oil']+=w['oil']*sub; st['cum_gas']+=w['gas']*sub; st['cum_wat']+=w['wat']*sub
                 a=wvol.setdefault(wid,{'liq':0.0,'oil':0.0,'wat':0.0,'gas':0.0}); 
@@ -166,7 +168,7 @@ def iter_forecast(nodes, edges, start_date, years=5, step_days=30, events=None, 
             rem-=sub; nsub+=1
             if rem<=1e-9: break
             yield _event('stage','Depletion substep %d: re-solving network (%.0f d left in step)'%(nsub+1,rem),date,nsub)
-            try: nn,info,details=solve_now(nn0,date); converged=converged and bool(info.get('success'))
+            try: nn,info,details=solve_now(nn0,date,t+dt_days-rem); converged=converged and bool(info.get('success'))
             except Exception: converged=False; break
         if dt_days>0:
             avg={k:vol[k]/dt_days for k in vol}; wavg={wid:{k:v[k]/dt_days for k in v} for wid,v in wvol.items()}

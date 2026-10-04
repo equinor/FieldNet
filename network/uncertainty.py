@@ -100,6 +100,19 @@ def _find_target(nodes, edges, target_id):
         if str(obj.get("id"))==str(target_id): return obj
     raise ValueError(f"Unknown uncertainty target_id: {target_id}")
 
+def _find_targets(nodes, edges, target_id):
+    """``'kind:well'`` / ``'kind:reservoir'`` / ``'edges'`` select a whole group (one shared sample for all members); otherwise one element."""
+    t = str(target_id)
+    if t.startswith("kind:"):
+        k = t.split(":", 1)[1]; objs = [o for o in nodes if o.get("kind") == k]
+        if not objs: raise ValueError(f"No nodes of kind {k!r} for the uncertainty target")
+        return objs
+    if t == "edges:pipeline":
+        objs = [e for e in edges if e.get("kind", "pipeline") == "pipeline"]
+        if not objs: raise ValueError("No pipelines for the uncertainty target")
+        return objs
+    return [_find_target(nodes, edges, target_id)]
+
 def _get_nested(obj: dict, path: str):
     cur=obj
     for part in path.split("."): cur=cur[part]
@@ -127,12 +140,14 @@ def apply_sample(nodes, edges, scenario: DevelopmentScenario, parameters: Iterab
             attr=p.path.split(".",1)[1]
             if not hasattr(ss,attr): raise ValueError(f"{p.name}: unknown scenario attribute {attr}")
             base=getattr(ss,attr); final=_bounded_value(p, float(base)*val if p.operation=="multiply" else val); setattr(ss,attr,final); continue
-        target=_find_target(nn,ee,p.target_id)
-        if target is None: raise ValueError(f"{p.name}: target_id required for path {p.path}")
-        try: base=_get_nested(target,p.path)
-        except (KeyError,TypeError) as exc: raise ValueError(f"{p.name}: unknown parameter path {p.path}") from exc
-        final=_bounded_value(p, float(base)*val if p.operation=="multiply" else val)
-        _set_nested(target,p.path,final)
+        if p.target_id is None: raise ValueError(f"{p.name}: target_id required for path {p.path}")
+        for target in _find_targets(nn,ee,p.target_id):
+            try: base=_get_nested(target,p.path)
+            except (KeyError,TypeError) as exc:
+                if str(p.target_id).startswith(("kind:","edges:")): continue   # group member without this parameter
+                raise ValueError(f"{p.name}: unknown parameter path {p.path}") from exc
+            final=_bounded_value(p, float(base)*val if p.operation=="multiply" else val)
+            _set_nested(target,p.path,final)
     return nn,ee,ss
 
 def percentile_summary(values: Iterable[float]) -> dict[str,float]:

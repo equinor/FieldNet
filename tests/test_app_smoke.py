@@ -48,3 +48,33 @@ def test_advanced_panels_run_with_solved_demo_and_forecast():
     s = root.session_state
     assert s.get('adv_sens') and s.get('adv_rel') and s.get('adv_vfp'), [k for k in s if k.startswith('adv')]
     errs = [c for c in root.calls if c[0] == 'error']; assert not errs, errs
+
+
+def test_development_plan_runs_with_progress_and_results_browser():
+    from network.examples import demo_field_case
+    n, e = demo_field_case()
+    root = run_app(APP, {'nodes': n, 'edges': e, 'sch_years': 1.0}, pressed={'sch_run'})
+    s = root.session_state
+    assert s.get('sched_result'), 'development plan did not run'
+    assert s.get('_rb_sch_run', {}).get('status') == 'done'
+    errs = [c for c in root.calls if c[0] == 'error']; assert not errs, errs
+    assert any(c == ('markdown', '#### Network at a chosen date') for c in root.calls)
+
+
+def test_prediction_source_page_applies_decline_and_external_tank():
+    from network.examples import demo_field_case
+    n, e = demo_field_case()
+    root = run_app(APP, {'nodes': n, 'edges': e, 'ps_kind': 'decline', 'ps_qi': 900.0}, pressed={'ps_apply_wells'})
+    ws = [x for x in root.session_state['nodes'] if x['kind'] == 'well']
+    assert ws and all((x['params'].get('prediction_source') or {}).get('type') == 'decline' for x in ws)
+    errs = [c for c in root.calls if c[0] == 'error']; assert not errs, errs
+
+
+def test_monte_carlo_builder_runs_and_has_green_button():
+    from network.examples import demo_field_case
+    n, e = demo_field_case()
+    root = run_app(APP, {'nodes': n, 'edges': e, 'v17_samples': 5, 'v17_years': 0.5}, pressed={'rb_mc'})
+    s = root.session_state
+    assert s.get('mc_params') and s['mc_params'][0]['target_id'] == 'kind:well'
+    assert s.get('v17_mc') and s['_rb_rb_mc']['status'] == 'done', {k: v for k, v in s.items() if k.startswith('_rb')}
+    errs = [c for c in root.calls if c[0] == 'error']; assert not errs, errs

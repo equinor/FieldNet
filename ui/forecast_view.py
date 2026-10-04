@@ -3,6 +3,8 @@ from __future__ import annotations
 import pandas as pd
 from network.forecast import run_forecast, iter_forecast
 from network.run_control import RunController
+from ui.run_button import style_button
+from ui.results_browser import render_results_browser
 from network.field_development import _coerce_value
 from network.prognosis import forecast_kpis
 from ui import charts
@@ -116,6 +118,8 @@ def render_forecast(st, nodes, edges):
             st.caption('Shut in or start up wells, change rate limits, separator pressure, flowline diameter ... Pick the event, the element and the date; values use your unit profile. The same schedule is used by the Development schedule and Scenarios tabs.')
             sched = render_event_builder(st, nodes, edges, None, st.session_state.get('unit_profile', 'norwegian_si'), key_prefix='evb_fc', start_date=start)
         store_el = st.toggle('Store per-element profiles (slower, needed by the Element results tab)', value=True, key='fc_store_el')
+        _ctl0 = st.session_state.get('fc_ctl')
+        if _ctl0 is not None: style_button(st, 'fc_run', {'done': 'done', 'running': 'running', 'paused': 'running', 'failed': 'failed'}.get(_ctl0.status, 'none'))
         run = st.button('▶ Run forecast', type='primary', use_container_width=True, key='fc_run')
     if run:
         ids = {str(x.get('id')) for x in [*nodes, *edges]}
@@ -138,6 +142,8 @@ def render_forecast(st, nodes, edges):
     if k.get('peak_oil_m3d', 0) <= 0:
         st.error('No oil was produced. Typical causes: separator pressure too high for the wells to flow, wells not open, or wells connected to a tank with a pipeline (drag the tank onto the well instead).')
     profile_charts(st, fc)
+    with st.expander('Browse results: network at a chosen date, any element over time', expanded=False):
+        render_results_browser(st, nodes, edges, fc, key='fc_rb')
     if fc.get('recovery'):
         st.markdown('**Recovery by reservoir tank**')
         rdf = pd.DataFrame(fc['recovery'])

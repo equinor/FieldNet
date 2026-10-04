@@ -115,7 +115,20 @@ def _case(args):
     return {'metric': float(metric_fn(r)), 'converged': bool(info.get('success')) and info.get('quality_gate', 'PASS') == 'PASS', 'active': act}
 
 
-def _run(cases, nodes, edges, metric_fn, enforce, workers):
+def _run(cases, nodes, edges, metric_fn, enforce, workers, progress=None):
+    """Run all cases. ``progress(done, total)`` is called after each case (serial runs only; parallel runs report once at the end)."""
+    from network.uncertainty import parallel_map
+    if progress is not None and int(workers or 1) <= 1:
+        out = []
+        for i, ch in enumerate(cases):
+            out.append(_case((nodes, edges, ch, metric_fn, enforce))); progress(i + 1, len(cases))
+        return out
+    res = _run_parallel(cases, nodes, edges, metric_fn, enforce, workers)
+    if progress is not None: progress(len(cases), len(cases))
+    return res
+
+
+def _run_parallel(cases, nodes, edges, metric_fn, enforce, workers):
     from network.uncertainty import parallel_map
     return parallel_map(_case, [(nodes, edges, ch, metric_fn, enforce) for ch in cases], workers)
 
@@ -150,7 +163,7 @@ def default_parameters(nodes, edges, rel=0.2):
 
 
 # --- tornado -------------------------------------------------------------------------------------
-def tornado(nodes, edges, parameters=None, metric_fn=total_oil_rate, enforce_constraints=True, workers=1):
+def tornado(nodes, edges, parameters=None, metric_fn=total_oil_rate, enforce_constraints=True, workers=1, progress=None):
     """One-at-a-time low/high study. ``parameters``: list of ``SensParam`` or ``(label, path, low, high[, mode])`` tuples
     (default: ``default_parameters``). ``metric_fn(result_tuple)`` must be a top-level function when ``workers>1``.
 
@@ -160,7 +173,7 @@ def tornado(nodes, edges, parameters=None, metric_fn=total_oil_rate, enforce_con
     """
     params = [_as_param(p) for p in (parameters if parameters is not None else default_parameters(nodes, edges))]
     cases = [[]] + [[(p, p.low)] for p in params] + [[(p, p.high)] for p in params]
-    res = _run(cases, nodes, edges, metric_fn, enforce_constraints, workers)
+    res = _run(cases, nodes, edges, metric_fn, enforce_constraints, workers, progress)
     base = res[0]; n = len(params); rows = []
     for i, p in enumerate(params):
         a, b = res[1 + i], res[1 + n + i]
@@ -177,7 +190,7 @@ def _label(c):
     return '' if not c else f"{c.get('Component', '')}: {c.get('Constraint', '')}"
 
 
-def envelope(nodes, edges, x_param, y_param, grid, metric_fn=total_oil_rate, enforce_constraints=True, workers=1):
+def envelope(nodes, edges, x_param, y_param, grid, metric_fn=total_oil_rate, enforce_constraints=True, workers=1, progress=None):
     """Two-parameter operating envelope. ``x_param``/``y_param``: ``SensParam`` / ``(label, path[, mode])`` (low/high unused);
     ``grid = (xs, ys)`` or ``{'x': xs, 'y': ys}`` with values in each parameter's own mode (absolute, multiplier or increment).
 
@@ -191,7 +204,7 @@ def envelope(nodes, edges, x_param, y_param, grid, metric_fn=total_oil_rate, enf
     xs, ys = (grid['x'], grid['y']) if isinstance(grid, dict) else grid
     xs = [float(v) for v in xs]; ys = [float(v) for v in ys]
     cases = [[(xp, x), (yp, y)] for y in ys for x in xs]
-    res = _run(cases, nodes, edges, metric_fn, enforce_constraints, workers)
+    res = _run(cases, nodes, edges, metric_fn, enforce_constraints, workers, progress)
     nx = len(xs); M = []; A = []; F = []; C = []
     for iy in range(len(ys)):
         row = res[iy * nx:(iy + 1) * nx]

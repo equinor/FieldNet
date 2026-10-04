@@ -26,7 +26,7 @@ def _tasks(rows):
     return out
 
 def render_development_v26(st,nodes,edges):
-    st.subheader('v26 Development Planning')
+    st.subheader('Development Planning')
     st.caption('Dependency- and resource-constrained development scheduling compiled into the existing quasi-steady production forecast. No economics are used.')
     c1,c2,c3=st.columns(3); start=c1.date_input('Plan start',key='v26_start').isoformat(); years=c2.number_input('Horizon [years]',0.1,50.0,5.0,0.5,key='v26_years'); step=c3.selectbox('Forecast timestep [days]',[7,14,30,60,90],2,key='v26_step')
     ids=pd.DataFrame([{'id':x.get('id'),'name':x.get('name',x.get('id')),'type':x.get('kind')} for x in [*nodes,*edges]])
@@ -38,10 +38,10 @@ def render_development_v26(st,nodes,edges):
     b1,b2=st.columns(2)
     try: plan=DevelopmentPlan('Development Plan',start,float(years),int(step),[t if t.earliest_start else DevelopmentTask(t.id,t.name,t.task_type,t.target_id,start,t.duration_days,t.predecessors,t.resource,t.field,t.value,t.description) for t in _tasks(df.to_dict('records'))])
     except Exception as exc: st.error(str(exc)); plan=None
-    if b1.button('Compile v26 schedule',use_container_width=True) and plan is not None:
+    if b1.button('Compile schedule',use_container_width=True) and plan is not None:
         try: st.session_state.v26_compiled=compile_plan(plan,nodes,edges)
         except Exception as exc: st.error(str(exc))
-    if b2.button('Run v26 development forecast',type='primary',use_container_width=True) and plan is not None:
+    if b2.button('Run development forecast',type='primary',use_container_width=True) and plan is not None:
         try: st.session_state.v26_result=run_development_plan(nodes,edges,plan); st.session_state.v26_compiled=st.session_state.v26_result['development_plan']
         except Exception as exc: st.error(str(exc))
     comp=st.session_state.get('v26_compiled')
@@ -50,7 +50,7 @@ def render_development_v26(st,nodes,edges):
         if not sdf.empty:
             sdf=sdf.assign(finish=[f if f>s0 else (pd.Timestamp(s0)+pd.Timedelta(days=1)).date().isoformat() for s0,f in zip(sdf['start'],sdf['finish'])])  # zero-duration bars are invisible
             st.plotly_chart(px.timeline(sdf,x_start='start',x_end='finish',y='name',color='resource',title='Development schedule'),use_container_width=True)
-        st.download_button('Download v26 plan JSON',json.dumps({**comp,'events':[e.as_forecast_event() for e in comp['events']]},indent=2,default=str),'fieldnet_v26_development_plan.json','application/json',use_container_width=True)
+        st.download_button('Download plan JSON',json.dumps({**comp,'events':[e.as_forecast_event() for e in comp['events']]},indent=2,default=str),'fieldnet_development_plan.json','application/json',use_container_width=True)
     r=st.session_state.get('v26_result')
     if r:
         f=pd.DataFrame(r['forecast']['field']); st.markdown('### Production consequence')

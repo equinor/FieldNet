@@ -68,7 +68,7 @@ def export_summary_json(results: list[dict[str, Any]]) -> str:
 
 
 def render_field_development(st, nodes: list[dict], edges: list[dict]) -> None:
-    st.subheader("v16.1 Field Development & Integrated Forecasting")
+    st.subheader("Field Development & Integrated Forecasting")
     st.caption("Schedule-driven, quasi-steady field planning. Each scenario reuses the network forecast kernel; this is not a transient reservoir simulator or reserves certification workflow.")
     c1, c2, c3, c4 = st.columns(4)
     start = c1.date_input("Development start", key="v16_start").isoformat()
@@ -89,7 +89,7 @@ def render_field_development(st, nodes: list[dict], edges: list[dict]) -> None:
         default = 1.0 if name.lower() == "base" else (1.25 if name.lower() == "low" else 0.75 if name.lower() == "high" else 1.0)
         multipliers[name] = cols[i % len(cols)].number_input(f"{name} decline multiplier", 0.0, 10.0, float(default), 0.05, key=f"v16_mult_{i}")
 
-    if st.button("▶ Run v16 development scenarios", type="primary", use_container_width=True):
+    if st.button("▶ Run development scenarios", type="primary", use_container_width=True):
         events = list(sched_events)
         scenarios = []
         for name in names:
@@ -137,5 +137,5 @@ def render_field_development(st, nodes: list[dict], edges: list[dict]) -> None:
     else:
         st.dataframe(constraint_df, hide_index=True, use_container_width=True)
     d1, d2 = st.columns(2)
-    d1.download_button("Download v16.1 timestep CSV", export_field_csv(results), "fieldnet_v16_1_development_forecast.csv", "text/csv", use_container_width=True)
-    d2.download_button("Download v16.1 scenario JSON", export_summary_json(results), "fieldnet_v16_1_scenarios.json", "application/json", use_container_width=True)
+    d1.download_button("Download timestep CSV", export_field_csv(results), "fieldnet_development_forecast.csv", "text/csv", use_container_width=True)
+    d2.download_button("Download scenario JSON", export_summary_json(results), "fieldnet_scenarios.json", "application/json", use_container_width=True)
