@@ -29,7 +29,16 @@ def fmt(v, unit='', scale=1.0, digits=0):
 
 
 def kpi_row(st, k):
+    from network.phase_pref import current
     c = st.columns(6)
+    if current(st) == 'Gas':
+        c[0].metric('Peak gas', fmt(k.get('peak_gas_sm3d'), 'MSm³/d', 1e6, 2))
+        c[1].metric('Plateau', fmt(k.get('plateau_gas_years'), 'yr', digits=1), help='Time with gas rate ≥ 90 % of peak')
+        c[2].metric('Cumulative gas', fmt(k.get('cum_gas_sm3'), 'GSm³', 1e9, 2))
+        c[3].metric('Recovery factor', fmt(k.get('rf_gas_pct'), '%', digits=1) if k.get('rf_gas_pct') is not None else '— (no gas tank)')
+        c[4].metric('Cumulative condensate / oil', fmt(k.get('cum_oil_sm3'), 'MSm³', 1e6, 3))
+        c[5].metric('Final water cut', fmt(k.get('final_water_cut_pct'), '%'))
+        return
     c[0].metric('Peak oil', fmt(k.get('peak_oil_m3d'), 'Sm³/d'))
     c[1].metric('Plateau', fmt(k.get('plateau_years'), 'yr', digits=1), help='Time with oil rate ≥ 90 % of peak')
     c[2].metric('Cumulative oil', fmt(k.get('cum_oil_sm3'), 'MSm³', 1e6, 2))
@@ -39,24 +48,35 @@ def kpi_row(st, k):
 
 
 def profile_charts(st, fc, key=''):
+    from network.phase_pref import current
+    gas_first = current(st) == 'Gas'
     fdf = pd.DataFrame(fc['field']); wdf = pd.DataFrame(fc['wells']); tdf = pd.DataFrame(fc.get('tanks', []))
-    a, b = st.columns(2)
-    a.plotly_chart(charts.lines(fdf, 'Date', ['Oil [m3/d]', 'Water [m3/d]', 'Total liquid [m3/d]', 'Water injection [m3/d]'], 'Liquid rates', 'Sm³/d',
-                                colors={'Oil [m3/d]': charts.OIL, 'Water [m3/d]': charts.WATER, 'Total liquid [m3/d]': charts.LIQUID, 'Water injection [m3/d]': charts.INJ},
-                                dash={'Total liquid [m3/d]': 'dot', 'Water injection [m3/d]': 'dash'}), use_container_width=True, key=f'fc_liq{key}')
-    b.plotly_chart(charts.lines(fdf, 'Date', ['Gas [Sm3/d]'], 'Gas rate', 'Sm³/d', colors={'Gas [Sm3/d]': charts.GAS}), use_container_width=True, key=f'fc_gas{key}')
-    c, d = st.columns(2)
+    fdf['Gas [MSm3/d]'] = fdf['Gas [Sm3/d]'] / 1e6; fdf['Cumulative gas [GSm3]'] = fdf['Cumulative gas [Sm3]'] / 1e9
+    fdf['CGR [Sm3/MSm3]'] = (fdf['Oil [m3/d]'] / fdf['Gas [MSm3/d]'].where(fdf['Gas [MSm3/d]'] > 0)).fillna(0.0)
+    liq = lambda: charts.lines(fdf, 'Date', ['Oil [m3/d]', 'Water [m3/d]', 'Total liquid [m3/d]', 'Water injection [m3/d]'], 'Liquid rates', 'Sm³/d',
+                               colors={'Oil [m3/d]': charts.OIL, 'Water [m3/d]': charts.WATER, 'Total liquid [m3/d]': charts.LIQUID, 'Water injection [m3/d]': charts.INJ},
+                               dash={'Total liquid [m3/d]': 'dot', 'Water injection [m3/d]': 'dash'})
+    gas = lambda: charts.lines(fdf, 'Date', ['Gas [MSm3/d]'], 'Gas rate', 'MSm³/d', colors={'Gas [MSm3/d]': charts.GAS})
     cdf = fdf.assign(**{'Cumulative oil [MSm3]': fdf['Cumulative oil [Sm3]'] / 1e6})
-    c.plotly_chart(charts.lines(cdf, 'Date', ['Cumulative oil [MSm3]'], 'Cumulative oil', 'MSm³', colors={'Cumulative oil [MSm3]': charts.OIL}), use_container_width=True, key=f'fc_cum{key}')
+    cum_oil = lambda: charts.lines(cdf, 'Date', ['Cumulative oil [MSm3]'], 'Cumulative oil', 'MSm³', colors={'Cumulative oil [MSm3]': charts.OIL})
+    cum_gas = lambda: charts.lines(fdf, 'Date', ['Cumulative gas [GSm3]'], 'Cumulative gas', 'GSm³', colors={'Cumulative gas [GSm3]': charts.GAS})
+    a, b = st.columns(2)
+    (a.plotly_chart(gas(), use_container_width=True, key=f'fc_gas{key}'), b.plotly_chart(liq(), use_container_width=True, key=f'fc_liq{key}')) if gas_first else \
+        (a.plotly_chart(liq(), use_container_width=True, key=f'fc_liq{key}'), b.plotly_chart(gas(), use_container_width=True, key=f'fc_gas{key}'))
+    c, d = st.columns(2)
+    c.plotly_chart(cum_gas() if gas_first else cum_oil(), use_container_width=True, key=f'fc_cum{key}')
     if not tdf.empty:
         d.plotly_chart(charts.by_category_lines(tdf, 'Date', 'Pressure [bar]', 'Tank', 'Reservoir pressure', 'bar'), use_container_width=True, key=f'fc_pr{key}')
     elif not wdf.empty:
         d.plotly_chart(charts.by_category_lines(wdf, 'Date', 'Reservoir pressure [bar]', 'Well', 'Reservoir pressure (per-well decline)', 'bar'), use_container_width=True, key=f'fc_pr{key}')
     e, f = st.columns(2)
     e.plotly_chart(charts.lines(fdf, 'Date', ['Water cut [%]'], 'Water cut', '%', colors={'Water cut [%]': charts.WATER}), use_container_width=True, key=f'fc_wc{key}')
-    f.plotly_chart(charts.lines(fdf, 'Date', ['GOR [Sm3/Sm3]'], 'Producing GOR', 'Sm³/Sm³', colors={'GOR [Sm3/Sm3]': charts.GAS}), use_container_width=True, key=f'fc_gor{key}')
+    if gas_first: f.plotly_chart(charts.lines(fdf, 'Date', ['CGR [Sm3/MSm3]'], 'Condensate-gas ratio', 'Sm³/MSm³', colors={'CGR [Sm3/MSm3]': charts.OIL}), use_container_width=True, key=f'fc_gor{key}')
+    else: f.plotly_chart(charts.lines(fdf, 'Date', ['GOR [Sm3/Sm3]'], 'Producing GOR', 'Sm³/Sm³', colors={'GOR [Sm3/Sm3]': charts.GAS}), use_container_width=True, key=f'fc_gor{key}')
     if not wdf.empty:
-        st.plotly_chart(charts.stacked_area(wdf, 'Date', 'Oil [m3/d]', 'Well', 'Oil rate by well', 'Sm³/d'), use_container_width=True, key=f'fc_wells{key}')
+        if gas_first:
+            w2 = wdf.assign(**{'Gas [MSm3/d]': wdf['Gas [Sm3/d]'] / 1e6}); st.plotly_chart(charts.stacked_area(w2, 'Date', 'Gas [MSm3/d]', 'Well', 'Gas rate by well', 'MSm³/d'), use_container_width=True, key=f'fc_wells{key}')
+        else: st.plotly_chart(charts.stacked_area(wdf, 'Date', 'Oil [m3/d]', 'Well', 'Oil rate by well', 'Sm³/d'), use_container_width=True, key=f'fc_wells{key}')
 
 
 def _drive_run(st, nodes, edges):

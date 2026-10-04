@@ -15,27 +15,40 @@ from ui import charts
 PCTS = {'P90 (low case)': 90, 'P75': 75, 'P50 (median)': 50, 'P25': 25, 'P10 (high case)': 10}
 
 
+def _axis(st):
+    """(factor, label): liquid rate [m3/d] on the x axis for an oil field, gas rate [MSm3/d] for a gas field (gas = liquid x (1 - WC) x GOR)."""
+    return st.session_state.get('_nodal_axis') or (1.0, 'Liquid rate [m³/d]')
+
+
+def _set_axis(st, prm):
+    from network.phase_pref import current
+    if current(st) == 'Gas':
+        from physics.well_model import well_settings
+        ws = well_settings(prm); st.session_state['_nodal_axis'] = ((1.0 - ws['water_cut']) * ws['gor'] / 1e6, 'Gas rate [MSm³/d]')
+    else: st.session_state['_nodal_axis'] = (1.0, 'Liquid rate [m³/d]')
+
+
 def _go():
     import plotly.graph_objects as go; return go
 
 
-def _curves_fig(curves, title, op=None, points=None, height=420):
+def _curves_fig(curves, title, op=None, points=None, height=420, ax=(1.0, 'Liquid rate [m³/d]')):
     """curves: list of (name, q, ipr, vlp, style) ."""
-    go = _go(); fig = go.Figure()
+    go = _go(); fig = go.Figure(); k = ax[0]
     for name, q, ipr, vlp, sty in curves:
-        keep = np.asarray(ipr) >= 0
+        q = np.asarray(q) * k; keep = np.asarray(ipr) >= 0
         fig.add_trace(go.Scatter(x=np.asarray(q)[keep], y=np.asarray(ipr)[keep], mode='lines', name=f'IPR {name}', line=dict(color=charts.OIL, width=sty.get('w', 2), dash=sty.get('dash', 'solid'))))
         fig.add_trace(go.Scatter(x=q, y=vlp, mode='lines', name=f'VLP {name}', line=dict(color=charts.CATEGORICAL[0], width=sty.get('w', 2), dash=sty.get('dash', 'solid'))))
     if op:
         for name, (qq, pp) in op.items():
-            if qq and qq > 0: fig.add_trace(go.Scatter(x=[qq], y=[pp], mode='markers', name=f'Operating point {name}', marker=dict(size=11, color=charts.GAS, line=dict(width=2, color='white'))))
+            if qq and qq > 0: fig.add_trace(go.Scatter(x=[qq * k], y=[pp], mode='markers', name=f'Operating point {name}', marker=dict(size=11, color=charts.GAS, line=dict(width=2, color='white'))))
     if points is not None and len(points):
-        fig.add_trace(go.Scatter(x=points['Rate [m3/d]'], y=points['BHP [bar]'], mode='markers', name='Measured', marker=dict(size=10, symbol='diamond', color='#000')))
-    return charts.style(fig, title, 'Bottom-hole pressure [bar]', 'Liquid rate [m³/d]', height)
+        fig.add_trace(go.Scatter(x=np.asarray(points['Rate [m3/d]']) * k, y=points['BHP [bar]'], mode='markers', name='Measured', marker=dict(size=10, symbol='diamond', color='#000')))
+    return charts.style(fig, title, 'Bottom-hole pressure [bar]', ax[1], height)
 
 
 def render_nodal_tools(st, wid, name, prm, whp, nodes, edges, model_hash, reset=None):
-    ss = st.session_state
+    ss = st.session_state; _set_axis(st, prm)
     t_unc, t_match, t_blow = st.tabs(['Uncertainty & what-if', 'Match to measured data', 'Blowout / worst-case discharge'])
     with t_unc: _uncertainty(st, wid, name, prm, whp, model_hash)
     with t_match: _matching(st, wid, name, prm, whp, nodes, reset)
@@ -65,7 +78,7 @@ def _uncertainty(st, wid, name, prm, whp, model_hash):
         vals[s['key']] = cols[i % len(cols)].slider(f"{s['label']} [{s['unit']}]", lo, hi, float(min(max(s['mode'], lo), hi)), step, key=f'nu_sl_{wid}_{s["key"]}')
     base_p, base_w = prm, whp; wi_p, wi_w = nu.apply_overrides(prm, whp, vals)
     cap = nu.q_grid([base_p, wi_p]); b_i, b_v = nu.curves(base_p, base_w, cap); w_i, w_v = nu.curves(wi_p, wi_w, cap); ob = nu.operating_point(base_p, base_w); ow = nu.operating_point(wi_p, wi_w)
-    st.plotly_chart(_curves_fig([('base', cap, b_i, b_v, {'dash': 'dot', 'w': 1.5}), ('what-if', cap, w_i, w_v, {})], f'{name}: base case vs what-if', op={'base': (ob['q_liq'], ob['bhp']), 'what-if': (ow['q_liq'], ow['bhp'])}), use_container_width=True, key=f'nu_whatif_{wid}')
+    st.plotly_chart(_curves_fig([('base', cap, b_i, b_v, {'dash': 'dot', 'w': 1.5}), ('what-if', cap, w_i, w_v, {})], f'{name}: base case vs what-if', op={'base': (ob['q_liq'], ob['bhp']), 'what-if': (ow['q_liq'], ow['bhp'])}, ax=_axis(st)), use_container_width=True, key=f'nu_whatif_{wid}')
     a, b, c = st.columns(3); a.metric('Liquid rate', f"{ow['q_liq']:,.0f} m³/d", f"{ow['q_liq'] - ob['q_liq']:+,.0f} vs base"); b.metric('Oil rate', f"{ow['q_oil']:,.0f} Sm³/d", f"{ow['q_oil'] - ob['q_oil']:+,.0f}"); c.metric('Status', ow['status'])
     st.markdown('**Monte-Carlo fan**')
     m1, m2, m3 = st.columns(3); n = m1.number_input('Samples', 10, 1000, 100, 10, key=f'nu_n_{wid}'); seed = m2.number_input('Seed', 0, 99999, 1701, 1, key=f'nu_seed_{wid}')
@@ -76,7 +89,7 @@ def _uncertainty(st, wid, name, prm, whp, model_hash):
         except Exception as exc: rb.fail(str(exc))
     res = store.get(wid)
     if not res: st.caption('Run the Monte-Carlo to see the fan of curves, the rate distribution and the percentile slider.'); return
-    go = _go(); env = res['envelope']; fig = go.Figure(); q = env['q [m3/d]']; ok = env['IPR P10'] >= 0
+    go = _go(); env = res['envelope']; fig = go.Figure(); _k, _xl = _axis(st); q = env['q [m3/d]'] * _k; ok = env['IPR P10'] >= 0
     for tag, col in (('IPR', charts.OIL), ('VLP', charts.CATEGORICAL[0])):
         xs = q[ok] if tag == 'IPR' else q
         lo = env[f'{tag} P90'][ok] if tag == 'IPR' else env[f'{tag} P90']; hi = env[f'{tag} P10'][ok] if tag == 'IPR' else env[f'{tag} P10']; mid = env[f'{tag} P50'][ok] if tag == 'IPR' else env[f'{tag} P50']
@@ -84,15 +97,15 @@ def _uncertainty(st, wid, name, prm, whp, model_hash):
         fig.add_trace(go.Scatter(x=xs, y=mid, mode='lines', name=f'{tag} P50', line=dict(color=col, width=2)))
     pct_name = st.select_slider('Show the realisation at probability of exceedance', list(PCTS), value='P50 (median)', key=f'nu_pct_{wid}'); idx = nu.pick_realisation(res, PCTS[pct_name]); row = res['samples'].iloc[idx]
     ipr_i, vlp_i = res['ipr'][idx], res['vlp'][idx]; keep = ipr_i >= 0
-    fig.add_trace(go.Scatter(x=res['q'][keep], y=ipr_i[keep], mode='lines', name='IPR (selected)', line=dict(color=charts.OIL, width=3, dash='dash'))); fig.add_trace(go.Scatter(x=res['q'], y=vlp_i, mode='lines', name='VLP (selected)', line=dict(color=charts.CATEGORICAL[0], width=3, dash='dash')))
-    if row['q_liq'] > 0: fig.add_trace(go.Scatter(x=[row['q_liq']], y=[row['bhp']], mode='markers', name='Operating point (selected)', marker=dict(size=12, color=charts.GAS, line=dict(width=2, color='white'))))
-    st.plotly_chart(charts.style(fig, f"{name}: spread of inflow / outflow curves ({len(res['samples'])} samples)", 'Bottom-hole pressure [bar]', 'Liquid rate [m³/d]', 460), use_container_width=True, key=f'nu_fan_{wid}')
+    fig.add_trace(go.Scatter(x=res['q'][keep] * _k, y=ipr_i[keep], mode='lines', name='IPR (selected)', line=dict(color=charts.OIL, width=3, dash='dash'))); fig.add_trace(go.Scatter(x=res['q'] * _k, y=vlp_i, mode='lines', name='VLP (selected)', line=dict(color=charts.CATEGORICAL[0], width=3, dash='dash')))
+    if row['q_liq'] > 0: fig.add_trace(go.Scatter(x=[row['q_liq'] * _k], y=[row['bhp']], mode='markers', name='Operating point (selected)', marker=dict(size=12, color=charts.GAS, line=dict(width=2, color='white'))))
+    st.plotly_chart(charts.style(fig, f"{name}: spread of inflow / outflow curves ({len(res['samples'])} samples)", 'Bottom-hole pressure [bar]', _xl, 460), use_container_width=True, key=f'nu_fan_{wid}')
     cols = st.columns(len(chosen) + 1); cols[0].metric('Liquid rate', f"{row['q_liq']:,.0f} m³/d")
     for c, s in zip(cols[1:], specs): c.metric(s['label'], f"{row[s['key']]:,.4g} {s['unit']}")
     sm = res['summary']; rows = [{'Quantity': k, 'P90 (low)': v.get('P90'), 'P50': v.get('P50'), 'P10 (high)': v.get('P10'), 'Mean': v.get('Mean')} for k, v in sm.items() if isinstance(v, dict) and v]
     st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True); st.caption(f"Probability the well flows at all: {sm.get('P(flowing)', 0):.0%}. P90 = value exceeded with 90 % probability (low case), P10 = high case.")
     a, b = st.columns(2); h = res['samples']['q_liq']
-    fh = go.Figure(go.Histogram(x=h, nbinsx=20, marker_color=charts.OIL)); a.plotly_chart(charts.style(fh, 'Liquid rate distribution', 'Samples', 'Liquid rate [m³/d]', 300, legend=False), use_container_width=True, key=f'nu_hist_{wid}')
+    fh = go.Figure(go.Histogram(x=h * _k, nbinsx=20, marker_color=charts.OIL)); a.plotly_chart(charts.style(fh, 'Rate distribution', 'Samples', _xl, 300, legend=False), use_container_width=True, key=f'nu_hist_{wid}')
     if len(res['sensitivity']): sd = res['sensitivity']; fb = go.Figure(go.Bar(y=sd['Input'][::-1], x=sd['Rank correlation with liquid rate'][::-1], orientation='h', marker_color=charts.CATEGORICAL[0])); b.plotly_chart(charts.style(fb, 'Which input drives the rate', None, 'Rank correlation', 300, legend=False), use_container_width=True, key=f'nu_sens_{wid}')
     table_actions(st, res['samples'], f'nodal_mc_{name}', f'nu_ta_{wid}')
 
@@ -149,7 +162,7 @@ def _matching(st, wid, name, prm, whp, nodes, reset):
         fig.update_yaxes(autorange='reversed', rangemode='normal'); st.plotly_chart(charts.style(fig, 'Flowing-gradient survey vs correlations', 'TVD [m]', 'Pressure [bar]', 380), use_container_width=True, key=f'wm_sv_fig_{wid}')
     matched = wm.apply_match(prm, ipr, vlp if (vlp and 'error' not in vlp) else None); cap = nu.q_grid([prm, matched]); b_i, b_v = nu.curves(prm, whp, cap); m_i, m_v = nu.curves(matched, whp, cap)
     ob = nu.operating_point(prm, whp); om = nu.operating_point(matched, whp)
-    st.plotly_chart(_curves_fig([('before', cap, b_i, b_v, {'dash': 'dot', 'w': 1.5}), ('matched', cap, m_i, m_v, {})], f'{name}: before vs matched, with measured points', op={'before': (ob['q_liq'], ob['bhp']), 'matched': (om['q_liq'], om['bhp'])}, points=tests if 'BHP [bar]' in tests else None), use_container_width=True, key=f'wm_fig_{wid}')
+    st.plotly_chart(_curves_fig([('before', cap, b_i, b_v, {'dash': 'dot', 'w': 1.5}), ('matched', cap, m_i, m_v, {})], f'{name}: before vs matched, with measured points', op={'before': (ob['q_liq'], ob['bhp']), 'matched': (om['q_liq'], om['bhp'])}, points=tests if 'BHP [bar]' in tests else None, ax=_axis(st)), use_container_width=True, key=f'wm_fig_{wid}')
     if len(tests) and 'BHP [bar]' in tests and 'WHP [bar]' in tests:
         rows = []
         for _, r in tests.dropna(subset=['BHP [bar]', 'WHP [bar]']).iterrows():
@@ -192,7 +205,7 @@ def _blowout(st, wid, name, prm, nodes, model_hash):
     st.dataframe(res['table'], hide_index=True, use_container_width=True); table_actions(st, res['table'], f'blowout_scenarios_{name}', f'bo_ta_{wid}')
     cv = m['curves']; vl = cv['vlp']; ipr = cv['ipr']; q = cv['q']
     curves = [('', q, ipr, next(iter(vl.values())), {})] + ([('annulus', q, ipr, vl['annulus'], {'dash': 'dot'})] if 'annulus' in vl and 'tubing' in vl else [])
-    st.plotly_chart(_curves_fig(curves, f'{name}: inflow vs open-flow outflow at exit pressure {m["exit_pressure_bar"]:.1f} bar', op={'blowout': (m['q_liq'] if len(m['path_rates']) == 1 else None, m['pwf'])}), use_container_width=True, key=f'bo_fig_{wid}')
+    st.plotly_chart(_curves_fig(curves, f'{name}: inflow vs open-flow outflow at exit pressure {m["exit_pressure_bar"]:.1f} bar', op={'blowout': (m['q_liq'] if len(m['path_rates']) == 1 else None, m['pwf'])}, ax=_axis(st)), use_container_width=True, key=f'bo_fig_{wid}')
     with st.expander('Release over time (depletion of the connected volume)'):
         tk = next((n for n in nodes if n['id'] == (prm.get('reservoir_id') or '')), None); pv0 = 0.0
         if tk and (tk.get('params') or {}).get('stoiip_sm3'): tp = tk['params']; pv0 = float(tp['stoiip_sm3']) * float(tp.get('boi_rm3_sm3') or 1.2) / max(1 - float(tp.get('swi') or 0.2), 0.05)

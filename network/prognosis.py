@@ -26,7 +26,14 @@ def forecast_kpis(fc, plateau_fraction=0.9):
     stoiip = sum((r.get('Cum oil [Sm3]', 0.0) / (r['RF oil [%]'] / 100.0)) for r in rec if r.get('Phase') == 'oil' and r.get('RF oil [%]', 0) > 0)
     cum_oil = float(rows[-1].get('Cumulative oil [Sm3]', 0.0))
     first = next((r['Date'] for r in rows if float(r.get('Oil [m3/d]', 0.0)) > 1e-6), None)
-    return {'first_oil': first, 'peak_oil_m3d': peak, 'plateau_years': plateau_days / 365.25,
+    gas = [float(r.get('Gas [Sm3/d]', 0.0)) for r in rows]; gpeak = max(gas) if gas else 0.0; gplat = 0.0
+    if gpeak > 0:
+        for i in range(len(rows) - 1):
+            if gas[i] >= plateau_fraction * gpeak: gplat += days[i + 1] - days[i]
+    giip = sum((r.get('Cum gas [Sm3]', 0.0) / (r['RF gas [%]'] / 100.0)) for r in rec if r.get('Phase') in ('gas', 'gas_condensate', 'condensate') and r.get('RF gas [%]', 0) > 0)
+    cum_gas = float(rows[-1].get('Cumulative gas [Sm3]', 0.0))
+    return {'peak_gas_sm3d': gpeak, 'plateau_gas_years': gplat / 365.25, 'final_gas_sm3d': gas[-1], 'rf_gas_pct': 100.0 * cum_gas / giip if giip > 0 else None,
+            'first_oil': first, 'peak_oil_m3d': peak, 'plateau_years': plateau_days / 365.25,
             'cum_oil_sm3': cum_oil, 'cum_gas_sm3': float(rows[-1].get('Cumulative gas [Sm3]', 0.0)),
             'cum_water_m3': float(rows[-1].get('Cumulative water [m3]', 0.0)),
             'rf_oil_pct': 100.0 * cum_oil / stoiip if stoiip > 0 else None,

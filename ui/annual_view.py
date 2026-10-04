@@ -24,7 +24,7 @@ def render_annual(st, hub, key='an'):
     measures = [c for c in conv.columns if c not in SKIP and not c.startswith('Cum ') and 'pressure' not in c.lower()]
     if not measures: st.info('Nothing to plot.'); return
     if ent is None:
-        pick = st.multiselect('Series', measures, default=[m for m in measures if m.startswith(('Oil [', 'Gas [', 'Water ['))][:3], key=f'{key}_series')
+        pick = st.multiselect('Series', measures, default=sorted([m for m in measures if m.startswith(('Oil [', 'Gas [', 'Water ['))], key=lambda m: ((0 if m.startswith('Gas') else 1) if st.session_state.get('_phase_resolved') == 'Gas' else (0 if m.startswith('Oil') else 1)))[:3], key=f'{key}_series')
         cumul = st.checkbox('Add cumulative lines below', value=False, key=f'{key}_cum')
         if not pick: st.info('Pick at least one series.'); return
         cum_cols = [('Cum ' + m) for m in pick if ('Cum ' + m) in conv.columns] if cumul else None

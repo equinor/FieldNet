@@ -42,7 +42,7 @@ def render_groups(st, nodes, edges, hub, solved, reset=None):
     sel = st.multiselect('Groups to plot', sorted(gp['Group'].unique()), default=sorted(gp['Group'].unique())[:4], key='grp_plot_sel')
     if sel:
         d = gp[gp['Group'].isin(sel)]
-        q = st.selectbox('Quantity', [c for c in ('Oil [m3/d]', 'Gas [Sm3/d]', 'Water [m3/d]', 'Liquid [m3/d]', 'Water injection [m3/d]', 'Cumulative oil [Sm3]', 'Pressure [bar]', 'RF oil [%]', 'Water cut [%]', 'GOR [Sm3/Sm3]') if c in d], key='grp_q')
+        q = st.selectbox('Quantity', [c for c in (('Gas [Sm3/d]', 'Oil [m3/d]') if st.session_state.get('_phase_resolved') == 'Gas' else ('Oil [m3/d]', 'Gas [Sm3/d]')) + ( 'Water [m3/d]', 'Liquid [m3/d]', 'Water injection [m3/d]', 'Cumulative gas [Sm3]', 'Cumulative oil [Sm3]', 'Pressure [bar]', 'RF gas [%]', 'RF oil [%]', 'Water cut [%]', 'GOR [Sm3/Sm3]') if c in d], key='grp_q')
         st.plotly_chart(charts.by_category_lines(d, 'Date', q, 'Group', f'{q.split(" [")[0]} by group', q.split('[')[-1].rstrip(']') if '[' in q else ''), use_container_width=True, key='grp_fig')
     ga = hub.datasets.get('groups_annual')
     if ga is not None:

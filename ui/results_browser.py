@@ -45,8 +45,11 @@ def render_results_browser(st, nodes, edges, fc, key='rb'):
     frow = next((r for r in fc['field'] if str(r.get('Date')) == str(date)), None)
     if frow:
         c = st.columns(5)
-        c[0].metric('Oil', f"{frow.get('Oil [m3/d]', 0):,.0f} Sm³/d"); c[1].metric('Water', f"{frow.get('Water [m3/d]', 0):,.0f} m³/d"); c[2].metric('Gas', f"{frow.get('Gas [Sm3/d]', 0) / 1e6:,.2f} MSm³/d")
-        c[3].metric('Wells flowing', f"{frow.get('Wells flowing', 0)}"); c[4].metric('Cumulative oil', f"{frow.get('Cumulative oil [Sm3]', 0)/1e6:,.2f} MSm³")
+        gas = st.session_state.get('_phase_resolved') == 'Gas'
+        oil_m = lambda col: col.metric('Condensate / oil' if gas else 'Oil', f"{frow.get('Oil [m3/d]', 0):,.0f} Sm³/d"); gas_m = lambda col: col.metric('Gas', f"{frow.get('Gas [Sm3/d]', 0) / 1e6:,.2f} MSm³/d")
+        (gas_m(c[0]), oil_m(c[2])) if gas else (oil_m(c[0]), gas_m(c[2])); c[1].metric('Water', f"{frow.get('Water [m3/d]', 0):,.0f} m³/d")
+        c[3].metric('Wells flowing', f"{frow.get('Wells flowing', 0)}")
+        c[4].metric('Cumulative gas', f"{frow.get('Cumulative gas [Sm3]', 0)/1e9:,.2f} GSm³") if gas else c[4].metric('Cumulative oil', f"{frow.get('Cumulative oil [Sm3]', 0)/1e6:,.2f} MSm³")
     svg = network_svg_at(nodes, edges, fc, date)
     try:
         import streamlit.components.v1 as components

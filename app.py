@@ -44,6 +44,8 @@ from ui.graph_contract import (accept_canvas_payload, solve_status, current_resu
 from ui.graph_contract import set_edge_kind, graph_hash, SOLVED, solver_input
 from network.features import palette as feature_palette
 from ui.canvas_labels import canvas_labels
+from network.phase_pref import PREFS as PHASE_PREFS, resolve as resolve_phase
+from network.net_display import label_maps, MODES as NET_MODES, AUTO as NET_AUTO, browse_frame, NODE_PARAMS, EDGE_PARAMS
 from ui.compute_panel import render_compute_settings
 from ui.element_view import render_element_results
 from ui.tank_coupling import tank_coupling_table, communication_table, apply_communication_table
@@ -75,6 +77,7 @@ from ui.interchange_v27 import render_interchange_v27
 from ui.scenario_v29 import render_scenario_v29
 from ui.cases_view import render_cases, library
 from ui.templates_view import render_templates, load_template
+from ui.availability_view import render_availability
 from network.templates import TEMPLATES
 from ui.pvt_view import render_pvt
 from ui.hub_access import current_hub, table_actions
@@ -172,6 +175,10 @@ def request_solve():
 
 
 with st.sidebar:
+    st.header('Display')
+    st.radio('Primary phase',PHASE_PREFS,horizontal=True,key='primary_phase_pref',help='Which phase leads the cards, charts, nodal plots and network labels. Auto follows the model: gas rate for a gas field, oil for an oil field.')
+    st.session_state['_phase_resolved']=resolve_phase(st.session_state.get('primary_phase_pref','Auto'),st.session_state.nodes,solved(),st.session_state.get('forecast'))
+    st.caption(f"Showing **{st.session_state['_phase_resolved'].lower()}** as the primary phase.")
     st.header('Component palette')
     kind=st.selectbox('Component',['reservoir','well','manifold','separator','separator_stage','water_source','gas_source','water_injector','gas_injector','oil_export','gas_export','water_disposal','sink']); name=st.text_input('Name',f'{kind.upper()}-{len(st.session_state.nodes)+1:02d}')
     if st.button('Add component',use_container_width=True):
@@ -193,7 +200,7 @@ G=st.tabs(['🗺️ Network','🛢️ Reservoir & wells','📊 Results','📈 Pr
 tab_net=G[0]
 with G[1]: tab_nodal,tab_tanks,tab_groups,tab_sources,tab_pvt=st.tabs(['Nodal analysis','Tanks & coupling','Groups','Prediction source','Fluid & PVT'])
 with G[2]: tab_results,tab_diag,tab_elem=st.tabs(['Summary & constraints','Profiles & flow assurance','Element results'])
-with G[3]: tab_forecast,tab_annual,tab_dev26,tab_development=st.tabs(['Production forecast','Yearly profiles','Development schedule','Scenarios & well count'])
+with G[3]: tab_forecast,tab_annual,tab_avail,tab_dev26,tab_development=st.tabs(['Production forecast','Yearly profiles','Availability & downtime','Development schedule','Scenarios & well count'])
 with G[4]: tab_cal=st.container()
 with G[5]: tab_uncertainty,tab_rel=st.tabs(['Monte Carlo','Reliability'])
 with G[7]: tab_ops,tab_qa28,tab_io27=st.tabs(['Engineering tools','Model checks','Import / export & snapshots'])
@@ -214,9 +221,12 @@ with tab_net:
         _honour=tb2.checkbox('Honour constraints',value=True,key='cmp_honour_cb',help='On: separator / export capacities, per-phase limits, velocity, erosion and connection limits are enforced by choking upstream wells (GAP "with constraints"). Off: unconstrained solve; violations are only reported.')
         tb3.caption(f"{'🟢' if status==SOLVED else '🟡' if status==SOLVING else '🔴' if status==FAILED else '⚪'} {status}")
         compute=render_compute_settings(st,st.session_state.nodes,st.session_state.edges,honour=_honour)
+        _show=st.selectbox('Show on network',NET_MODES,index=0,key='net_show',help='What is printed on the components and flowlines after a solve. Auto shows liquid rate and water cut for an oil field and the gas rate (MSm³/d) for a gas field.')
+        try: _nlab,_elab=label_maps(st.session_state.nodes,st.session_state.edges,solved(),_show,phase=st.session_state.get('_phase_resolved'))
+        except Exception: _nlab,_elab=canvas_labels(st.session_state.nodes,solved()),{}
         edit=network_editor(st.session_state.nodes, st.session_state.edges, solved(), key='network-v14', height=_edh,
                             status=status, status_message=status_msg, selected=st.session_state.get('selected'),
-                            palette=feature_palette(), labels=canvas_labels(st.session_state.nodes, solved()))
+                            palette=feature_palette(), labels=_nlab, edge_labels=_elab)
         # One contract (ui/graph_contract.py): only a new canvas revision is an edit; stale replays are ignored.
         if accept_canvas_payload(st.session_state, edit)=='graph': st.rerun()
         for msg in st.session_state.pop('graph_issues',[]) or []: st.warning(msg)
@@ -401,7 +411,7 @@ with tab_net:
         if st.session_state['_panel_reruns']<=2: st.rerun()
     else: st.session_state['_panel_reruns']=0
     c1,c2,c3=st.columns([1,1,1])
-    payload=json.dumps(to_builtin({'version':'30','application':'FieldNet v30','storage_units':'canonical','display_unit_profile':PROFILE,'standard_conditions':STANDARD_CONDITIONS,'nodes':st.session_state.nodes,'edges':st.session_state.edges}),indent=2,default=str); c3.download_button('Export network SVG',network_svg(st.session_state.nodes,st.session_state.edges,canvas_labels(st.session_state.nodes,solved()),(solved() or ({},{},{},{}))[1]),'fieldnet_network.svg','image/svg+xml',use_container_width=True)
+    payload=json.dumps(to_builtin({'version':'30','application':'FieldNet v30','storage_units':'canonical','display_unit_profile':PROFILE,'standard_conditions':STANDARD_CONDITIONS,'nodes':st.session_state.nodes,'edges':st.session_state.edges}),indent=2,default=str); c3.download_button('Export network SVG',network_svg(st.session_state.nodes,st.session_state.edges,_nlab,(solved() or ({},{},{},{}))[1],edge_labels=_elab),'fieldnet_network.svg','image/svg+xml',use_container_width=True)
     c2.download_button('Export case JSON',payload,'fieldnet_case.json','application/json',use_container_width=True)
     uploaded=st.file_uploader('Load FieldNet project JSON',type=['json'],key='project_upload')
     if uploaded is not None and st.button('Load project',use_container_width=True):
@@ -453,20 +463,27 @@ with tab_nodal:
         curve=pd.DataFrame({'q':qs,'IPR':[ipr_pwf(q,ws) for q in qs],'VLP':[vlp_bhp(q,whp,ws)[0] for q in qs]})
         curve=curve[curve['IPR']>=0]
         qop,stat=solve_well_rate(whp,ws)
-        fig=go.Figure(); X=[liquid_rate_to_display(v,PROFILE) for v in curve['q']]
+        _gasp=st.session_state.get('_phase_resolved')=='Gas'; _gk=(1.0-ws['water_cut'])*ws['gor']/1e6
+        fig=go.Figure(); X=[v*_gk for v in curve['q']] if _gasp else [liquid_rate_to_display(v,PROFILE) for v in curve['q']]
         fig.add_scatter(x=X,y=[pressure_to_display(v,PROFILE) for v in curve['IPR']],name='Inflow (IPR)',mode='lines',line=dict(color=charts.OIL,width=2))
         fig.add_scatter(x=X,y=[pressure_to_display(v,PROFILE) for v in curve['VLP']],name=f"Outflow (VLP, {prm['vlp_model']})",mode='lines',line=dict(color=charts.CATEGORICAL[0],width=2))
         if qop>0:
-            bop=ipr_pwf(qop,ws); fig.add_scatter(x=[liquid_rate_to_display(qop,PROFILE)],y=[pressure_to_display(bop,PROFILE)],name='Operating point',mode='markers',marker=dict(size=11,color=charts.GAS,line=dict(width=2,color='white')))
+            bop=ipr_pwf(qop,ws); fig.add_scatter(x=[qop*_gk if _gasp else liquid_rate_to_display(qop,PROFILE)],y=[pressure_to_display(bop,PROFILE)],name='Operating point',mode='markers',marker=dict(size=11,color=charts.GAS,line=dict(width=2,color='white')))
         _mt=pd.DataFrame((st.session_state.get('nodal_tests') or {}).get(wid) or [])
         if len(_mt) and {'Rate [m3/d]','BHP [bar]'}<=set(_mt.columns):
             _mt=_mt.dropna(subset=['Rate [m3/d]','BHP [bar]'])
-            if len(_mt): fig.add_scatter(x=[liquid_rate_to_display(v,PROFILE) for v in _mt['Rate [m3/d]']],y=[pressure_to_display(v,PROFILE) for v in _mt['BHP [bar]']],name='Measured well tests',mode='markers',marker=dict(size=10,symbol='diamond',color='#000'))
-        st.plotly_chart(charts.style(fig,f"{w['name']} — nodal analysis",f"Bottom-hole pressure [{ul['pressure']}]",f"Liquid rate [{ul['liquid_rate']}]",420),use_container_width=True)
+            if len(_mt): fig.add_scatter(x=[(v*_gk if _gasp else liquid_rate_to_display(v,PROFILE)) for v in _mt['Rate [m3/d]']],y=[pressure_to_display(v,PROFILE) for v in _mt['BHP [bar]']],name='Measured well tests',mode='markers',marker=dict(size=10,symbol='diamond',color='#000'))
+        st.plotly_chart(charts.style(fig,f"{w['name']} — nodal analysis",f"Bottom-hole pressure [{ul['pressure']}]",'Gas rate [MSm³/d]' if _gasp else f"Liquid rate [{ul['liquid_rate']}]",420),use_container_width=True)
         a,b,c,d=st.columns(4)
-        a.metric('Liquid rate',f"{liquid_rate_to_display(qop,PROFILE):,.1f} {ul['liquid_rate']}")
-        b.metric('Oil rate',f"{liquid_rate_to_display(qop*(1-ws['water_cut']),PROFILE):,.1f} {ul['liquid_rate']}")
-        c.metric('Gas rate',f"{qop*(1-ws['water_cut'])*ws['gor']/1e6:,.3f} MSm³/d")
+        _gasm=lambda: c.metric('Gas rate',f"{qop*(1-ws['water_cut'])*ws['gor']/1e6:,.3f} MSm³/d")
+        if _gasp:
+            a.metric('Gas rate',f"{qop*(1-ws['water_cut'])*ws['gor']/1e6:,.3f} MSm³/d")
+            b.metric('Condensate / oil rate',f"{liquid_rate_to_display(qop*(1-ws['water_cut']),PROFILE):,.1f} {ul['liquid_rate']}")
+            c.metric('Liquid rate',f"{liquid_rate_to_display(qop,PROFILE):,.1f} {ul['liquid_rate']}")
+        else:
+            a.metric('Liquid rate',f"{liquid_rate_to_display(qop,PROFILE):,.1f} {ul['liquid_rate']}")
+            b.metric('Oil rate',f"{liquid_rate_to_display(qop*(1-ws['water_cut']),PROFILE):,.1f} {ul['liquid_rate']}")
+            _gasm()
         d.metric('Status',{'flowing':'Flowing','rate_limited':'Rate-limited','dead':'Cannot flow','below_min_rate':'Below min. rate','shut_in':'Shut in'}.get(stat,stat))
         if qop<=0: st.warning(f"No stable IPR/VLP intersection at {pressure_to_display(whp,PROFILE):.1f} {ul['pressure']} WHP — the well cannot flow against this back-pressure. Lower the WHP or add lift.")
         if prm['lift_type']=='ESP' and qop>0:
@@ -548,8 +565,11 @@ with tab_results:
     else:
         p,q,info,d=r; nm={n['id']:n['name'] for n in st.session_state.nodes}
         k1,k2,k3,k4,k5=st.columns(5)
-        k1.metric('Oil',f"{sum(v.get('oil_rate_m3d',0) for v in d.values()):,.0f} Sm³/d"); k2.metric('Water',f"{sum(v.get('water_rate_m3d',0) for v in d.values()):,.0f} Sm³/d")
-        k3.metric('Gas',f"{sum(v.get('gas_rate_sm3d',0) for v in d.values())/1e6:,.2f} MSm³/d"); k4.metric('Wells flowing',f"{sum(1 for v in d.values() if v['liquid_rate_m3d']>1e-6)}/{len(d)}")
+        _oilm=lambda col: col.metric('Oil' if st.session_state.get('_phase_resolved')!='Gas' else 'Condensate / oil',f"{sum(v.get('oil_rate_m3d',0) for v in d.values()):,.0f} Sm³/d")
+        _gm=lambda col: col.metric('Gas',f"{sum(v.get('gas_rate_sm3d',0) for v in d.values())/1e6:,.2f} MSm³/d")
+        if st.session_state.get('_phase_resolved')=='Gas': _gm(k1); _oilm(k3)
+        else: _oilm(k1); _gm(k3)
+        k2.metric('Water',f"{sum(v.get('water_rate_m3d',0) for v in d.values()):,.0f} Sm³/d"); k4.metric('Wells flowing',f"{sum(1 for v in d.values() if v['liquid_rate_m3d']>1e-6)}/{len(d)}")
         k5.metric('Water injection',f"{sum((info.get('injector_rates') or {}).values()):,.0f} m³/d")
         a,b,c,dcol=st.columns(4); a.metric('Converged','Yes' if info['success'] else 'No'); b.metric('Max residual',f"{info['max_abs_residual']:.2e}"); c.metric('Quality gate',info.get('quality_gate','—')); dcol.metric('Constraint violations',info.get('violations',0))
         if info.get('quality_gate')!='PASS': st.warning('Quality gate FAIL. Review the solver debugger below (topology, boundary conditions, dead/unstable wells).')
@@ -568,6 +588,16 @@ with tab_results:
         st.dataframe(wdf,use_container_width=True,hide_index=True)
         if info.get('injectors'): st.caption('Injectors'); st.dataframe(pd.DataFrame(info['injectors']),hide_index=True,use_container_width=True)
         l,rr_=st.columns(2); l.plotly_chart(px.bar(rdf,x='Component',y=pcol,title='Node pressures'),use_container_width=True); rr_.plotly_chart(px.bar(qdf,x='Connection',y=qcol,title='Connection rates'),use_container_width=True)
+        with st.container(border=True):
+            st.markdown('**Browse a parameter**')
+            _b1,_b2=st.columns(2); _scope=_b1.radio('Show',['Nodes','Lines'],horizontal=True,key='br_scope')
+            _opts=list((NODE_PARAMS if _scope=='Nodes' else EDGE_PARAMS))
+            _par=_b2.selectbox('Parameter',_opts,format_func=lambda k:k.replace('[Sm3/d]','[MSm3/d]') if k=='Gas [Sm3/d]' else k,key='br_par')
+            _bf=browse_frame(st.session_state.nodes,st.session_state.edges,r,_scope,_par)
+            if len(_bf):
+                _vc=_bf.columns[-1]; _bf=_bf.sort_values(_vc,ascending=False)
+                st.plotly_chart(px.bar(_bf,x='Name',y=_vc,color='Kind',title=_vc),use_container_width=True,key='br_chart'); st.dataframe(_bf,hide_index=True,use_container_width=True)
+            else: st.caption('No values for this parameter in the current solve.')
 
 with tab_constraints:
     with st.container(border=True): render_constraint_editor(st, st.session_state.nodes, st.session_state.edges)
@@ -784,6 +814,8 @@ with tab_res25:
 
 
 
+
+with tab_avail: render_availability(st,st.session_state.nodes,st.session_state.edges,solved(),st.session_state.get('forecast'),reset=reset_solve)
 
 with tab_pvt:
     render_pvt(st,st.session_state.nodes,st.session_state.edges,solved)

@@ -105,3 +105,41 @@ def test_sidebar_example_loader():
     n, e = demo_field_case()
     root = run_app(APP, {'nodes': n, 'edges': e, 'sb_tpl': 'hpht_tight_gas_frac'}, pressed={'sb_tpl_load'}); _no_errors(root)
     assert {x['id'] for x in root.session_state['nodes']} == {x['id'] for x in build('hpht_tight_gas_frac')[0]}
+
+
+def test_network_display_modes():
+    from network.net_display import label_maps, MODES, AUTO, browse_frame, fmt_gas, field_is_gas
+    for key, expect in (('hpht_4slot_gas', 'MSm³/d'), ('daisy_chain_oil', 'WC')):
+        n, e = build(key); r = solve_v21(n, e)
+        nl, el = label_maps(n, e, r, AUTO); assert nl and el and any(expect in v for v in nl.values()), key
+        for m in MODES:
+            a, b = label_maps(n, e, r, m); assert isinstance(a, dict) and isinstance(b, dict) and (len(b) == len(e) or not b), m
+        assert any('MSm³/d' in v for v in label_maps(n, e, r, 'Gas rate')[0].values())
+        assert len(browse_frame(n, e, r, 'Nodes', 'Pressure [bar]')) and len(browse_frame(n, e, r, 'Lines', 'Gas [Sm3/d]'))
+    assert label_maps(n, e, None, AUTO) == ({}, {}) and fmt_gas(2.5e6) == '2.50 MSm³/d' and fmt_gas(5e3) == '5.0 kSm³/d'
+
+
+def test_network_tab_selector_and_browse_render():
+    n, e = build('hpht_4slot_gas'); s = {'nodes': n, 'edges': e}
+    r1 = run_app(APP, s, pressed={'solve_btn_top'}); _no_errors(r1)
+    st = dict(r1.session_state); st['net_show'] = 'Gas rate'; st['br_scope'] = 'Lines'; st['br_par'] = 'Gas [Sm3/d]'
+    _no_errors(run_app(APP, st))
+
+
+def test_phase_detection_and_kpis():
+    from network.phase_pref import detect, resolve
+    from network.forecast import run_forecast
+    from network.prognosis import forecast_kpis
+    for key, ph in (('hpht_4slot_gas', 'Gas'), ('subsea_compressor_gas', 'Gas'), ('daisy_chain_oil', 'Oil'), ('gas_condensate_tieback', 'Gas'), ('pure_depletion_oil', 'Oil')):
+        n, e = build(key); assert detect(n) == ph, key; assert detect(n, solve_v21(n, e)) == ph, key
+    assert resolve('Gas', n) == 'Gas' and resolve('Oil', n) == 'Oil' and resolve('Auto', n) == 'Oil'
+    n, e = build('subsea_compressor_gas'); k = forecast_kpis(run_forecast(n, e, '2028-01-01', years=1, step_days=180))
+    assert k['peak_gas_sm3d'] > 1e6 and k['plateau_gas_years'] > 0 and k['rf_gas_pct'] and k['final_gas_sm3d'] > 0
+
+
+def test_primary_phase_switch_renders_everywhere():
+    for key, pref in (('hpht_4slot_gas', 'Auto'), ('hpht_4slot_gas', 'Oil'), ('daisy_chain_oil', 'Gas'), ('daisy_chain_oil', 'Auto')):
+        n, e = build(key)
+        r1 = run_app(APP, {'nodes': n, 'edges': e, 'primary_phase_pref': pref, 'fc_years': 1.0, 'fc_step': 180}, pressed={'solve_btn_top', 'fc_run'}); _no_errors(r1)
+        ss = r1.session_state; assert ss['_phase_resolved'] == (pref if pref != 'Auto' else ('Gas' if 'gas' in key else 'Oil')), (key, pref)
+        _no_errors(run_app(APP, dict(ss, nodal_well=next(x['id'] for x in n if x['kind'] == 'well'))))

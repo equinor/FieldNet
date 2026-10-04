@@ -10,7 +10,7 @@ import copy
 from ui.topology import auto_layout
 
 PIPE_OIL = {'temperature_c': 55.0, 'water_cut': 0.1, 'gor_sm3sm3': 110.0, 'api': 34.0, 'gas_sg': 0.72, 'correlation': 'Beggs-Brill', 'initial_rate_m3d': 800.0}
-PIPE_GAS = {'temperature_c': 25.0, 'water_cut': 0.0, 'gor_sm3sm3': 1e5, 'api': 50.0, 'gas_sg': 0.68, 'correlation': 'Beggs-Brill', 'initial_rate_m3d': 100.0}
+PIPE_GAS = {'temperature_c': 25.0, 'water_cut': 0.0, 'gor_sm3sm3': 5e5, 'api': 50.0, 'gas_sg': 0.68, 'correlation': 'Beggs-Brill', 'initial_rate_m3d': 100.0}
 
 
 # ----------------------------------------------------------------------------- building blocks
@@ -69,7 +69,7 @@ def hpht_4slot_gas():
     n = [gas_tank('G1', 'HPHT-GAS', pr=750.0, t=170.0, giip=150e9, min_pressure_bar=120.0)]
     n += [gas_well(f'W{i}', f'SLOT-{i}', 'G1', depth_m=4800.0, gas_c_sm3d_bar2n=120.0, reservoir_pressure_bar=750.0, **hp) for i in range(1, 5)]
     n += [manifold('TPL', '4-SLOT TEMPLATE'), separator('HOST', 'HOST PLATFORM', 80.0, max_gas_rate_sm3d=26e6)]
-    e = [pipe(f'JMP{i}', f'W{i}', 'TPL', 150, 0.1, 0, **PIPE_GAS) for i in range(1, 5)] + [pipe('EXPORT', 'TPL', 'HOST', 25000, 0.3, 80, **PIPE_GAS)]
+    e = [pipe(f'JMP{i}', f'W{i}', 'TPL', 150, 0.3, 0, **PIPE_GAS) for i in range(1, 5)] + [pipe('EXPORT', 'TPL', 'HOST', 25000, 0.6, 80, **PIPE_GAS)]
     return _finish(n, e)
 
 
@@ -182,7 +182,7 @@ def hpht_tight_gas_frac():
         for k in (1, 2): n.append(gas_well(f'F{c}{k}', f'FRAC-{c}{k}', f'C{c}', depth_m=4600.0, gas_c_sm3d_bar2n=14.0, gas_n=0.9, skin=-4.5, tubing_id_m=0.1016, reservoir_pressure_bar=780.0, pvt=dict(pvt),
                                            bottomhole_temperature_c=175.0, frac_half_length_m=120.0, frac_stages=12))
     n += [manifold('M1', 'WELL PAD MANIFOLD'), separator('SEP', 'PLANT', 70.0, max_gas_rate_sm3d=16e6)]
-    e = [pipe(f'FL{w["id"]}', w['id'], 'M1', 1500, 0.1, 0, **PIPE_GAS) for w in n if w['kind'] == 'well'] + [pipe('TRUNK', 'M1', 'SEP', 12000, 0.25, 0, **PIPE_GAS)]
+    e = [pipe(f'FL{w["id"]}', w['id'], 'M1', 1500, 0.15, 0, **PIPE_GAS) for w in n if w['kind'] == 'well'] + [pipe('TRUNK', 'M1', 'SEP', 12000, 0.4, 0, **PIPE_GAS)]
     return _finish(n, e)
 
 
@@ -221,7 +221,7 @@ def gas_condensate_tieback():
     n += [gas_well(f'W{i}', f'SUBSEA-{i}', 'G1', depth_m=3800.0, gas_c_sm3d_bar2n=80.0, reservoir_pressure_bar=420.0, gor_sm3sm3=16000.0, api=48.0) for i in range(1, 4)]
     n += [manifold('M1', 'SUBSEA MANIFOLD'), separator('HOST', 'HOST', 60.0, max_gas_rate_sm3d=11e6)]
     pf = dict(PIPE_GAS, gor_sm3sm3=16000.0, api=48.0, thermal_model='heat_loss', ambient_temperature_c=4.0)
-    e = [pipe(f'FL{i}', f'W{i}', 'M1', 800, 0.15, 0, **dict(PIPE_GAS, gor_sm3sm3=16000.0, api=48.0)) for i in range(1, 4)] + [pipe('TIEBACK', 'M1', 'HOST', 35000, 0.35, 60, **pf)]
+    e = [pipe(f'FL{i}', f'W{i}', 'M1', 800, 0.2, 0, **dict(PIPE_GAS, gor_sm3sm3=16000.0, api=48.0)) for i in range(1, 4)] + [pipe('TIEBACK', 'M1', 'HOST', 35000, 0.5, 60, **pf)]
     return _finish(n, e)
 
 

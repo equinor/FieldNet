@@ -10,6 +10,19 @@ Version history and major releases. See [AUDIT_V30.md](AUDIT_V30.md) for detaile
 - **18 loadable templates** (`network/templates.py`, `ui/templates_view.py`; Cases & Data → Templates & examples): HPHT 4-slot subsea gas template, daisy chain, several communicating tanks with dual-zone wells, oil with gas injection, pure depletion, wellhead platform tied back to a host, subsea booster pump, subsea and topside compressors, horizontal wells, HPHT tight gas with fractured wells, gas lift, ESP, waterflood, gas-condensate tieback, onshore gas gathering, plus two learning examples. Each has a description, what to watch and suggested forecast settings; load into the editor or as a new case.
 - Forecast tab picks up the template's suggested start / horizon / step.
 
+### New (availability & downtime)
+- **Availability & downtime** page (Prognosis tab; `network/availability.py`, `ui/availability_view.py`): uptime %, MTBF / MTTR and planned downtime per year for any well, compressor, pump, separator / host, manifold, injector, choke or flowline, in one editable register; one click fills typical values (wells 95 %, compressors 94 %, pumps 95 %, separators 97 %, lines 99.5 %).
+- The forecast delivers only what is up all the way to the sink (series multiply, parallel trains share flow by solved flow); injectors are limited by the uptime of their source and upstream equipment. Downtime defers production: tanks deplete only by what is produced. Forecast rows gain `Uptime [%]`, `Oil deferred [m3/d]`, `Gas deferred [Sm3/d]` (field) and `Uptime [%]` (wells); they flow into the data hub and exports. Expected-value screening, no random clustering (use Tools -> Reliability), no catch-up, no take-over by a surviving parallel train beyond flow sharing.
+
+### Changed (primary phase)
+- **Primary phase** setting (sidebar → Display: Auto / Oil / Gas; `network/phase_pref.py`). Auto follows the model (solve, then forecast, then tank fluid phases). For a gas field: nodal plots (main, what-if, Monte-Carlo, matching, blowout) use gas rate in MSm³/d on the x axis, nodal cards lead with gas rate, forecast KPIs show peak gas / plateau / cumulative gas / gas RF, forecast charts lead with gas rate, cumulative gas, condensate-gas ratio and gas by well, summary cards, results-by-date cards, yearly profiles and groups default to gas, and network labels follow.
+- Forecast KPIs gained `peak_gas_sm3d`, `plateau_gas_years`, `final_gas_sm3d`, `rf_gas_pct`.
+
+### Changed (network display)
+- **Show on network** selector above the canvas (`network/net_display.py`): Auto (oil field: liquid rate & water cut; gas field: gas rate in MSm³/d), oil / gas / water rate, all three, pressure, BHP, GOR, line ΔP & velocity, erosional ratio, or names only. Applies to components and to flowline labels (new `edge_labels` argument of the canvas) and to the SVG export.
+- Results → Summary: **Browse a parameter** (nodes or lines; pressure, rates, BHP, ΔP, velocity, erosional ratio; gas in MSm³/d) with a sorted bar chart and table.
+- Gas templates: flowline GOR set to 5e5 (the engine's gas-well convention: gas = 5e5 x liquid-equivalent), pipe sizes raised so erosional ratios are about 1; HPHT export line 24 in. Previously the line pressure drop was under-stated for gas lines whose GOR did not match the wells.
+
 ### Fixed
 - Streamlit Cloud crash `ModuleNotFoundError: openpyxl` on the Excel buttons: `openpyxl` and `xlsxwriter` added to requirements.txt; the Excel buttons fall back to xlsxwriter or are disabled (CSV still works) instead of crashing.
 - Moving a box forced a new solve: the canvas re-normalises the model (default edge parameters) on every move, which changed the model fingerprint. Templates are now built in normalised form and default-valued edge parameters no longer count as a model change.

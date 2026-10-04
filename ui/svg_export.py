@@ -14,8 +14,8 @@ def _size(n):
     return W, H
 
 
-def network_svg(nodes, edges, labels=None, rates=None, title='FieldNet network'):
-    labels = labels or {}; rates = rates or {}; byid = {n['id']: n for n in nodes}
+def network_svg(nodes, edges, labels=None, rates=None, title='FieldNet network', edge_labels=None):
+    edge_labels = edge_labels or {}; labels = labels or {}; rates = rates or {}; byid = {n['id']: n for n in nodes}
     if not nodes: return '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="60"><text x="10" y="30">Empty network</text></svg>'
     def port(nid, out):
         n = byid[nid]; w, h = _size(n); return float(n.get('x') or 0) + (w if out else 0), float(n.get('y') or 0) + h / 2
@@ -35,7 +35,7 @@ def network_svg(nodes, edges, labels=None, rates=None, title='FieldNet network')
         if e.get('source') not in byid or e.get('target') not in byid: continue
         a, b = port(e['source'], True), port(e['target'], False); q = rates.get(e['id'])
         o.append(f'<path d="{curve(a, b)}" fill="none" stroke="#456" stroke-width="2" marker-end="url(#a)"/>')
-        txt = e.get('kind', 'pipeline') + (f' • {q:,.0f} m³/d' if q is not None else '')
+        txt = edge_labels.get(e['id']) or (e.get('kind', 'pipeline') + (f' • {q:,.0f} m³/d' if q is not None else ''))
         o.append(f'<text x="{(a[0]+b[0])/2:.1f}" y="{(a[1]+b[1])/2-6:.1f}" font-size="10" text-anchor="middle" fill="#234">{escape(txt)}</text>')
     for n in nodes:
         x, y = float(n.get('x') or 0), float(n.get('y') or 0); w, h = _size(n); k = n.get('kind', ''); col = COLORS.get(k, '#9aa5b1'); nm = escape(str(n.get('name', n['id'])))

@@ -145,6 +145,8 @@ Oil tank with aquifer, three producers (one gas lift), water injection.
 
 ## Limits
 
+- Gas convention of the engine: a gas well (Gas IPR) is carried as liquid-equivalent rate with GOR 5e5, whatever `gor_sm3sm3` says on the well. Flowlines of a gas model must carry the same GOR (5e5) or their pressure drop is under-stated; the gas templates are set this way. If you build a gas model by hand, copy this.
+
 - Numbers are illustrative; the shape (plateau, decline, back-pressure, benefit of equipment) is the point, not the volumes.
 - Fracture-stimulated wells are a strong negative skin plus a high deliverability coefficient: there is no fracture transient model.
 - A well draws from one tank. A dual-zone well is two zone wells joined at a joint (see the multi-tank template).
