@@ -303,7 +303,9 @@ def categories(): return list(dict.fromkeys(t['category'] for t in TEMPLATES.val
 def build(key):
     """Fresh (nodes, edges) of a template."""
     if key not in TEMPLATES: raise KeyError(key)
-    n, e = TEMPLATES[key]['builder'](); return copy.deepcopy(n), copy.deepcopy(e)
+    from ui.graph_contract import normalize_graph
+    n, e = TEMPLATES[key]['builder'](); n, e, _ = normalize_graph(copy.deepcopy(n), copy.deepcopy(e))   # same defaults the canvas adds, so moving a box never changes the model
+    return n, e
 
 
 def catalogue():

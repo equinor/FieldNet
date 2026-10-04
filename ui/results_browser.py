@@ -45,7 +45,7 @@ def render_results_browser(st, nodes, edges, fc, key='rb'):
     frow = next((r for r in fc['field'] if str(r.get('Date')) == str(date)), None)
     if frow:
         c = st.columns(5)
-        c[0].metric('Oil', f"{frow.get('Oil [m3/d]', 0):,.0f} Sm³/d"); c[1].metric('Water', f"{frow.get('Water [m3/d]', 0):,.0f} m³/d"); c[2].metric('Gas', f"{frow.get('Gas [Sm3/d]', 0):,.0f} Sm³/d")
+        c[0].metric('Oil', f"{frow.get('Oil [m3/d]', 0):,.0f} Sm³/d"); c[1].metric('Water', f"{frow.get('Water [m3/d]', 0):,.0f} m³/d"); c[2].metric('Gas', f"{frow.get('Gas [Sm3/d]', 0) / 1e6:,.2f} MSm³/d")
         c[3].metric('Wells flowing', f"{frow.get('Wells flowing', 0)}"); c[4].metric('Cumulative oil', f"{frow.get('Cumulative oil [Sm3]', 0)/1e6:,.2f} MSm³")
     svg = network_svg_at(nodes, edges, fc, date)
     try:

@@ -74,7 +74,8 @@ from network.examples import demo_field_case
 from ui.interchange_v27 import render_interchange_v27
 from ui.scenario_v29 import render_scenario_v29
 from ui.cases_view import render_cases, library
-from ui.templates_view import render_templates
+from ui.templates_view import render_templates, load_template
+from network.templates import TEMPLATES
 from ui.pvt_view import render_pvt
 from ui.hub_access import current_hub, table_actions
 from ui.annual_view import render_annual
@@ -183,7 +184,10 @@ with st.sidebar:
         n_existing=len(st.session_state.nodes)
         st.session_state.nodes.append({'id':nid,'kind':kind,'name':name,'pressure_bar':pressure,'x':60+(n_existing%4)*200,'y':60+(n_existing//4)*120,'params':prm}); st.rerun()
     st.caption('Connect components in the editor: drag from an OUT port onto another component’s IN port.')
-    if st.button('Load demo field',use_container_width=True): st.session_state.nodes,st.session_state.edges=demo_field_case(); reset_solve(); [st.session_state.pop(k,None) for k in ('forecast','sched_result','scn_results','wc_result')]; st.rerun()
+    st.divider(); st.markdown('**Load an example**')
+    _tpl_key=st.selectbox('Example / template',list(TEMPLATES),index=list(TEMPLATES).index('demo_waterflood_field'),format_func=lambda k:f"{TEMPLATES[k]['name']} ({TEMPLATES[k]['category']})",key='sb_tpl')
+    st.caption(TEMPLATES[_tpl_key]['shows'])
+    if st.button('Load example',use_container_width=True,key='sb_tpl_load'): load_template(st,_tpl_key,reset_solve); st.rerun()
 
 G=st.tabs(['🗺️ Network','🛢️ Reservoir & wells','📊 Results','📈 Prognosis','🎯 Calibration','🎲 Uncertainty','📁 Cases & Data','🧰 Tools'])
 tab_net=G[0]
@@ -462,7 +466,7 @@ with tab_nodal:
         a,b,c,d=st.columns(4)
         a.metric('Liquid rate',f"{liquid_rate_to_display(qop,PROFILE):,.1f} {ul['liquid_rate']}")
         b.metric('Oil rate',f"{liquid_rate_to_display(qop*(1-ws['water_cut']),PROFILE):,.1f} {ul['liquid_rate']}")
-        c.metric('Gas rate',f"{qop*(1-ws['water_cut'])*ws['gor']:,.0f} Sm³/d")
+        c.metric('Gas rate',f"{qop*(1-ws['water_cut'])*ws['gor']/1e6:,.3f} MSm³/d")
         d.metric('Status',{'flowing':'Flowing','rate_limited':'Rate-limited','dead':'Cannot flow','below_min_rate':'Below min. rate','shut_in':'Shut in'}.get(stat,stat))
         if qop<=0: st.warning(f"No stable IPR/VLP intersection at {pressure_to_display(whp,PROFILE):.1f} {ul['pressure']} WHP — the well cannot flow against this back-pressure. Lower the WHP or add lift.")
         if prm['lift_type']=='ESP' and qop>0:
@@ -545,7 +549,7 @@ with tab_results:
         p,q,info,d=r; nm={n['id']:n['name'] for n in st.session_state.nodes}
         k1,k2,k3,k4,k5=st.columns(5)
         k1.metric('Oil',f"{sum(v.get('oil_rate_m3d',0) for v in d.values()):,.0f} Sm³/d"); k2.metric('Water',f"{sum(v.get('water_rate_m3d',0) for v in d.values()):,.0f} Sm³/d")
-        k3.metric('Gas',f"{sum(v.get('gas_rate_sm3d',0) for v in d.values())/1e3:,.0f} kSm³/d"); k4.metric('Wells flowing',f"{sum(1 for v in d.values() if v['liquid_rate_m3d']>1e-6)}/{len(d)}")
+        k3.metric('Gas',f"{sum(v.get('gas_rate_sm3d',0) for v in d.values())/1e6:,.2f} MSm³/d"); k4.metric('Wells flowing',f"{sum(1 for v in d.values() if v['liquid_rate_m3d']>1e-6)}/{len(d)}")
         k5.metric('Water injection',f"{sum((info.get('injector_rates') or {}).values()):,.0f} m³/d")
         a,b,c,dcol=st.columns(4); a.metric('Converged','Yes' if info['success'] else 'No'); b.metric('Max residual',f"{info['max_abs_residual']:.2e}"); c.metric('Quality gate',info.get('quality_gate','—')); dcol.metric('Constraint violations',info.get('violations',0))
         if info.get('quality_gate')!='PASS': st.warning('Quality gate FAIL. Review the solver debugger below (topology, boundary conditions, dead/unstable wells).')

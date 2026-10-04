@@ -108,7 +108,7 @@ HASH_DEFAULTS = {
     'reservoir': {'fluid_phase': 'oil', 'reservoir_pressure_bar': 250.0, 'temperature_c': 90.0, 'boi_rm3_sm3': 1.25, 'rsi_sm3_sm3': 100.0,
                   'bubble_point_bar': 150.0, 'ct_1bar': 1.5e-4, 'swi': 0.2, 'min_pressure_bar': 20.0, 'aquifer_pi_m3d_bar': 0.0,
                   'water_breakthrough_rf': 0.05, 'rf_at_max_water_cut': 0.40, 'max_water_cut': 0.9, 'gor_rise_factor': 3.0},
-    'edge': {'ambient_temperature_c': 4.0, 'overall_u_w_m2k': 5.0, 'wax_appearance_temperature_c': 25.0, 'erosion_c_factor': 100.0},
+    'edge': {**EDGE_PARAM_DEFAULTS, 'ambient_temperature_c': 4.0, 'overall_u_w_m2k': 5.0, 'wax_appearance_temperature_c': 25.0, 'erosion_c_factor': 100.0},
 }
 _HASH_KIND = {'well': 'well', 'water_injector': 'injector', 'gas_injector': 'injector', 'injector': 'injector', 'reservoir': 'reservoir'}
 

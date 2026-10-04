@@ -43,8 +43,13 @@ def add_to_basket(st, name):
 
 def xlsx_bytes(df, sheet='data'):
     buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine='openpyxl') as xw: df.to_excel(xw, sheet_name=sheet[:31], index=False)
-    return buf.getvalue()
+    for eng in ('openpyxl', 'xlsxwriter'):
+        try:
+            buf = io.BytesIO()
+            with pd.ExcelWriter(buf, engine=eng) as xw: df.to_excel(xw, sheet_name=sheet[:31], index=False)
+            return buf.getvalue()
+        except ImportError: continue
+    return None   # no Excel writer installed: the Excel button is disabled, CSV still works
 
 
 def table_actions(st, df, name, key, description=''):
@@ -55,7 +60,9 @@ def table_actions(st, df, name, key, description=''):
     if on: reg[name] = df.copy()
     else: reg.pop(name, None)
     c2.download_button('CSV', df.to_csv(index=False), f'{name}.csv', 'text/csv', key=f'ta_csv_{key}', use_container_width=True)
-    c3.download_button('Excel', xlsx_bytes(df, name), f'{name}.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', key=f'ta_xl_{key}', use_container_width=True)
+    xb = xlsx_bytes(df, name)
+    if xb is None: c3.button('Excel (not installed)', key=f'ta_xl_{key}', disabled=True, use_container_width=True, help='Add openpyxl to requirements.txt')
+    else: c3.download_button('Excel', xb, f'{name}.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', key=f'ta_xl_{key}', use_container_width=True)
 
 
 def shared_tables(st): return dict(st.session_state.get('shared_tables') or {})

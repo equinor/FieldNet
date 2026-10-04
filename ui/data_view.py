@@ -50,7 +50,10 @@ def _export_tab(st, nodes, hub):
     info = dict(hub.info); chk = None
     try: chk = dh.check_consistency(hub)
     except Exception: pass
-    c1.download_button('📗 Excel (.xlsx)', ex.to_excel(sel, meta, info, chk), 'fieldnet_export.xlsx', MIME_XLSX, use_container_width=True, key='dl_xlsx')
+    try: _xl = ex.to_excel(sel, meta, info, chk)
+    except ImportError: _xl = None
+    if _xl is None: c1.button('📗 Excel (openpyxl missing)', disabled=True, use_container_width=True, key='dl_xlsx', help='Add openpyxl to requirements.txt')
+    else: c1.download_button('📗 Excel (.xlsx)', _xl, 'fieldnet_export.xlsx', MIME_XLSX, use_container_width=True, key='dl_xlsx')
     c2.download_button('🗜 CSV files (.zip)', ex.to_csv_zip(sel, meta, info), 'fieldnet_export_csv.zip', 'application/zip', use_container_width=True, key='dl_csv')
     c3.download_button('{ } JSON', ex.to_json(sel, meta, info), 'fieldnet_export.json', 'application/json', use_container_width=True, key='dl_json')
     c4.download_button('🔌 Local API bundle', ex.api_bundle(sel, meta, info), 'fieldnet_api_bundle.zip', 'application/zip', use_container_width=True, key='dl_api')
@@ -68,7 +71,10 @@ def _export_tab(st, nodes, hub):
             x1, x2, x3 = st.columns(3)
             x1.download_button('STEA table CSV (; and decimal comma)', ex.stea_csv(d, mp), 'fieldnet_stea_profiles.csv', 'text/csv', use_container_width=True, key='dl_stea_csv')
             x2.download_button('STEA table CSV (, and decimal point)', ex.stea_csv(d, mp, sep=',', decimal='.'), 'fieldnet_stea_profiles_en.csv', 'text/csv', use_container_width=True, key='dl_stea_csv2')
-            x3.download_button('STEA table Excel', ex.to_excel({'profiles': tbl}), 'fieldnet_stea_profiles.xlsx', MIME_XLSX, use_container_width=True, key='dl_stea_xlsx')
+            try: _sx = ex.to_excel({'profiles': tbl})
+            except ImportError: _sx = None
+            if _sx is None: x3.button('STEA Excel (openpyxl missing)', disabled=True, use_container_width=True, key='dl_stea_xlsx')
+            else: x3.download_button('STEA table Excel', _sx, 'fieldnet_stea_profiles.xlsx', MIME_XLSX, use_container_width=True, key='dl_stea_xlsx')
         else: st.info('No series could be built - run a forecast (the yearly volumes come from it).')
     except ValueError as exc: st.error(str(exc))
 

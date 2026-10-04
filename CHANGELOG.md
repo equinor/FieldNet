@@ -11,6 +11,10 @@ Version history and major releases. See [AUDIT_V30.md](AUDIT_V30.md) for detaile
 - Forecast tab picks up the template's suggested start / horizon / step.
 
 ### Fixed
+- Streamlit Cloud crash `ModuleNotFoundError: openpyxl` on the Excel buttons: `openpyxl` and `xlsxwriter` added to requirements.txt; the Excel buttons fall back to xlsxwriter or are disabled (CSV still works) instead of crashing.
+- Moving a box forced a new solve: the canvas re-normalises the model (default edge parameters) on every move, which changed the model fingerprint. Templates are now built in normalised form and default-valued edge parameters no longer count as a model change.
+- Gas cards show MSm³/d (network results, nodal card, results browser).
+- Sidebar: 'Load demo field' replaced by an example drop-down (all 18 templates) with a Load button.
 - Gas viscosity (Lee) overflowed at extreme solver trial pressures with correlation PVT; the exponent is now clamped (`physics/pvt_model.py`).
 
 ### Tests

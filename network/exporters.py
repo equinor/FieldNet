@@ -48,7 +48,9 @@ def to_json(datasets, meta=None, info=None):
 def to_excel(datasets, meta=None, info=None, checks=None):
     """One sheet per table plus a README sheet (catalogue, consistency checks). Returns bytes."""
     buf = io.BytesIO(); used = {'readme'}
-    with pd.ExcelWriter(buf, engine='openpyxl') as xw:
+    try: import openpyxl as _ox; _eng = 'openpyxl'
+    except ImportError: _eng = 'xlsxwriter'   # raises ImportError with a clear message if neither is installed
+    with pd.ExcelWriter(buf, engine=_eng) as xw:
         cat = pd.DataFrame([{'Sheet': None, 'Dataset': k, 'Rows': len(v), 'Description': (meta or {}).get(k, {}).get('description', ''), 'Units': (meta or {}).get(k, {}).get('units', '')} for k, v in datasets.items()])
         sheets = {}
         for k, v in datasets.items(): sheets[k] = _sheet(k, used)

@@ -82,3 +82,26 @@ def test_load_as_new_case_and_page_renders():
     n, e = demo_field_case(); _no_errors(run_app(APP, {'nodes': n, 'edges': e}))
     root = run_app(APP, {'nodes': n, 'edges': e, 'tpl_sel': 'daisy_chain_oil'}, pressed={'tpl_load_case'}); _no_errors(root)
     lib = root.session_state['case_library']; assert len(lib) == 1 and 'Daisy' in next(iter(lib.cases.values()))['name']
+
+
+def test_templates_are_canvas_stable():
+    """The canvas re-normalises the model on every move; a freshly loaded template must hash the same afterwards (no re-solve after moving a box)."""
+    from ui.graph_contract import normalize_graph, graph_hash
+    for k in KEYS:
+        n, e = build(k); n2, e2, _ = normalize_graph(n, e); assert graph_hash(n, e) == graph_hash(n2, e2), k
+        for x in n2: x['x'] = x['x'] + 37; x['y'] = x['y'] - 11
+        assert graph_hash(n, e) == graph_hash(n2, e2), k
+
+
+def test_old_models_with_default_edge_params_keep_hash():
+    from ui.graph_contract import normalize_graph, graph_hash
+    n, e = build('simple_well')
+    for x in e: x['params'] = {}
+    n2, e2, _ = normalize_graph(n, e); assert graph_hash(n, e) == graph_hash(n2, e2)
+
+
+def test_sidebar_example_loader():
+    from network.examples import demo_field_case
+    n, e = demo_field_case()
+    root = run_app(APP, {'nodes': n, 'edges': e, 'sb_tpl': 'hpht_tight_gas_frac'}, pressed={'sb_tpl_load'}); _no_errors(root)
+    assert {x['id'] for x in root.session_state['nodes']} == {x['id'] for x in build('hpht_tight_gas_frac')[0]}

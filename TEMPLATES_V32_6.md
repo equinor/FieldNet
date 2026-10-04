@@ -1,6 +1,6 @@
 # Templates & examples (v32.6)
 
-Cases & Data → **Templates & examples**. Pick a category and a template, read what it shows and what to watch, then **Load into the editor** (replaces the model on screen) or **Load and save as a new case**. Loading also sets the suggested start date, horizon and report step in Prognosis → Production forecast. Solve, then run the forecast.
+Sidebar → **Load an example** (drop-down + Load example), or Cases & Data → **Templates & examples**. Pick a category and a template, read what it shows and what to watch, then **Load into the editor** (replaces the model on screen) or **Load and save as a new case**. Loading also sets the suggested start date, horizon and report step in Prognosis → Production forecast. Solve, then run the forecast.
 
 All templates are illustrative round-number models for learning and for starting your own work. They are not real fields and are not calibrated to any data.
 
